@@ -1,0 +1,42 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": [
+      // https://docs.renovatebot.com/presets-config/#configrecommended
+      "config:recommended",
+      ":semanticCommitTypeAll(build)",
+      ":dependencyDashboard",
+      ":docker",
+      "docker:pinDigests"
+    ],
+    "useBaseBranchConfig": "merge",
+    "baseBranches": [
+        "$default",
+        "/^self\\/.*/"
+    ],
+    "major": {
+      "dependencyDashboardApproval": true
+    },
+    "dependencyDashboardApproval": false,
+    "dependencyDashboardLabels": [
+      "📌 dependencies"
+    ],
+    "labels": [
+      "📌 dependencies"
+    ],
+    "semanticCommits": "enabled",
+    "commitMessagePrefix": "{{{semanticPrefix}}} ⬆️",
+    "packageRules": [
+      {
+        "matchUpdateTypes": [
+          "pin"
+        ],
+        "commitMessagePrefix": "{{{semanticPrefix}}} 📌"
+      },
+      {
+        "matchUpdateTypes": [
+          "rollback"
+        ],
+        "commitMessagePrefix": "{{{semanticPrefix}}} ⬇️"
+      }
+    ]
+  }
