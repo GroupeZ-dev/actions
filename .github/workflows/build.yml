@@ -48,7 +48,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -87,20 +86,11 @@ jobs:
           echo "JAR_PATH=$jar_path" >> $GITHUB_OUTPUT
 
       - name: Upload JAR as artifact
-        if: ${{ github.event_name == 'pull_request' && steps.find_jar.outputs.JAR_PATH != '' }}
+        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.project-name }}-DEV-${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}-PR-${{ github.event.number }}-${{ github.run_id }}
-          path: ${{ steps.find_jar.outputs.JAR_PATH }}
-
-      - name: Comment PR with JAR
-        if: ${{ github.event_name == 'pull_request' && steps.find_jar.outputs.JAR_PATH != '' }}
-        uses: mshick/add-pr-comment@v2
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          message: |
-            🚀 Nouveau build DEV-PR-${{ github.event.number }} pour `${{ inputs.project-name }}`  
-            [Télécharger le JAR en artifact](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          path: target/
 
       - name: Discord Webhook Action
         if: ${{ github.event_name != 'pull_request' }}
