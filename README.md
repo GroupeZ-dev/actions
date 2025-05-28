@@ -19,6 +19,7 @@ build:
       java-distribution: "temurin" # Optional
       publish: false # Optional
       project-to-publish: "publish" # Optional
+      build-command: ./gradlew build # Optional
       discord-avatar-url: "https://minecraft-inventory-builder.com/storage/images/9UgcfGZyrmbVrXw5lbj5kXq6fW8F4nhwj6Cx4nVG.png" # Optional
       runs-on: "['ubuntu-latest']" # Optional
   secrets: inherit

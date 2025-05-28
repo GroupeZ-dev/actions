@@ -27,6 +27,11 @@ on:
         required: false
         type: string
         default: "publish"
+      build-command:
+        description: "Optional build command to run (default to ./gradlew build)"
+        required: false
+        type: string
+        default: "./gradlew build"
       discord-avatar-url:
         description: "Avatar url (default to zMenu avatar)"
         required: false
@@ -68,7 +73,9 @@ jobs:
           echo "GITHUB_SHA_SHORT=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_OUTPUT
 
       - name: Build with Gradle
-        run: ./gradlew build -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
+        run: |
+          chmod +x ./gradlew
+          ${{ inputs.build-command }} -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
 
       - name: Publish on GHCR
         if: ${{ inputs.publish && github.event_name != 'pull_request' }}
