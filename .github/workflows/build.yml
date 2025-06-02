@@ -46,7 +46,7 @@ on:
       WEBHOOK_URL:
         description: "Discord webhook url"
         required: true
-    
+
 jobs:
   build:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
@@ -55,9 +55,9 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # ratchet:actions/setup-java@v4
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
@@ -94,14 +94,14 @@ jobs:
 
       - name: Upload JAR as artifact
         if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4
         with:
           name: ${{ inputs.project-name }}-DEV-${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}-PR-${{ github.event.number }}-${{ github.run_id }}
           path: target/
 
       - name: Discord Webhook Action
         if: ${{ github.event_name != 'pull_request' }}
-        uses: tsickert/discord-webhook@v7.0.0
+        uses: tsickert/discord-webhook@b217a69502f52803de774ded2b1ab7c282e99645 # ratchet:tsickert/discord-webhook@v7.0.0
         with:
           webhook-url: ${{ secrets.WEBHOOK_URL }}
           content: "New development build of ${{ inputs.project-name }} is available!"
