@@ -82,7 +82,7 @@ jobs:
         run: ./gradlew ${{ inputs.project-to-publish }} -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
 
       - name: Find ${{ inputs.project-name }} JAR
         id: find_jar
