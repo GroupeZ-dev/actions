@@ -46,6 +46,12 @@ on:
       WEBHOOK_URL:
         description: "Discord webhook url"
         required: true
+      MAVEN_USERNAME:
+        description: "Maven Username"
+        required: true
+      MAVEN_PASSWORD:
+        description: "Maven password"
+        required: true
 
 jobs:
   build:
