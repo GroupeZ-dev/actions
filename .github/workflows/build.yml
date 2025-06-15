@@ -89,16 +89,22 @@ jobs:
       - name: Build with Gradle
         run: |
           chmod +x ./gradlew
-          ${{ inputs.build-command }} -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
+          if [ "${GITHUB_REF##*/}" = "${{ inputs.default-branch }}" ]; then
+            ${{ inputs.build-command }}
+          else
+            ${{ inputs.build-command }} -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
+          fi
 
       - name: Publish on maven
         if: ${{ inputs.publish && github.event_name != 'pull_request' }}
         run: |
-          GRADLE_ARGS="-Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}"
+          GRADLE_CMD="./gradlew ${{ inputs.project-to-publish }}"
           if [ "${GITHUB_REF##*/}" = "${{ inputs.default-branch }}" ]; then
-            GRADLE_ARGS="$GRADLE_ARGS -Drepository.name=releases"
+            $GRADLE_CMD -Drepository.name=releases
+          else
+            $GRADLE_CMD -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
           fi
-          ./gradlew ${{ inputs.project-to-publish }} $GRADLE_ARGS
+
         env:
           MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
