@@ -37,6 +37,11 @@ on:
         required: false
         type: string
         default: "https://minecraft-inventory-builder.com/storage/images/9UgcfGZyrmbVrXw5lbj5kXq6fW8F4nhwj6Cx4nVG.png"
+      default-branch:
+        description: "Default branch to check for releases"
+        required: false
+        type: string
+        default: "main"
       runs-on:
         description: "Optional label for the runner to run on"
         required: false
@@ -86,9 +91,14 @@ jobs:
           chmod +x ./gradlew
           ${{ inputs.build-command }} -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
 
-      - name: Publish on GHCR
+      - name: Publish on maven
         if: ${{ inputs.publish && github.event_name != 'pull_request' }}
-        run: ./gradlew ${{ inputs.project-to-publish }} -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
+        run: |
+          GRADLE_ARGS="-Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}"
+          if [ "${GITHUB_REF##*/}" = "${{ inputs.default-branch }}" ]; then
+            GRADLE_ARGS="$GRADLE_ARGS -Drepository.name=releases"
+          fi
+          ./gradlew ${{ inputs.project-to-publish }} $GRADLE_ARGS
         env:
           MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
