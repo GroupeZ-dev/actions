@@ -69,6 +69,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
 
+      - name: Set IS_DEFAULT_BRANCH env var
+        run: |
+          if [ "${GITHUB_REF##*/}" = "${{ inputs.default-branch }}" ]; then
+            echo "IS_DEFAULT_BRANCH=true" >> $GITHUB_ENV
+          else
+            echo "IS_DEFAULT_BRANCH=false" >> $GITHUB_ENV
+          fi
+
       - name: Set up JDK ${{ inputs.java-version }}
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # ratchet:actions/setup-java@v4
         with:
@@ -89,7 +97,7 @@ jobs:
       - name: Build with Gradle
         run: |
           chmod +x ./gradlew
-          if [ "${GITHUB_REF##*/}" = "${{ inputs.default-branch }}" ]; then
+          if [ "$IS_DEFAULT_BRANCH" = "true" ]; then
             ${{ inputs.build-command }}
           else
             ${{ inputs.build-command }} -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
@@ -99,7 +107,7 @@ jobs:
         if: ${{ inputs.publish && github.event_name != 'pull_request' }}
         run: |
           GRADLE_CMD="./gradlew ${{ inputs.project-to-publish }}"
-          if [ "${GITHUB_REF##*/}" = "${{ inputs.default-branch }}" ]; then
+          if [ "$IS_DEFAULT_BRANCH" = "true" ]; then
             $GRADLE_CMD -Drepository.name=releases
           else
             $GRADLE_CMD -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
@@ -129,7 +137,7 @@ jobs:
         uses: tsickert/discord-webhook@b217a69502f52803de774ded2b1ab7c282e99645 # ratchet:tsickert/discord-webhook@v7.0.0
         with:
           webhook-url: ${{ secrets.WEBHOOK_URL }}
-          content: "New development build of ${{ inputs.project-name }} is available!"
+          content: ${{ env.IS_DEFAULT_BRANCH == 'true' && format('New release build of {0} is available!', inputs.project-name) || format('New development build of {0} is available!', inputs.project-name) }}
           avatar-url: ${{ inputs.discord-avatar-url }}
           username: ${{ inputs.project-name }}
           filename: ${{ steps.find_jar.outputs.jar_path }}
