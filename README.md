@@ -20,10 +20,13 @@ build:
       publish: false # Optional
       project-to-publish: "publish" # Optional
       build-command: ./gradlew build # Optional
+      publish-on-discord: true # Optional
       discord-avatar-url: "https://minecraft-inventory-builder.com/storage/images/9UgcfGZyrmbVrXw5lbj5kXq6fW8F4nhwj6Cx4nVG.png" # Optional
       runs-on: "['ubuntu-latest']" # Optional
   secrets: inherit
   # or
   secrets:
     WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+    MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+    MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
 ```
