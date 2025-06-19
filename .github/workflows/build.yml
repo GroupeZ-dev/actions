@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: "./gradlew build"
+      publish-on-discord:
+        description: "If a message should be sent to discord on build completion"
+        required: false
+        type: boolean
+        default: true
       discord-avatar-url:
         description: "Avatar url (default to zMenu avatar)"
         required: false
@@ -133,7 +138,7 @@ jobs:
           path: target/
 
       - name: Discord Webhook Action
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ inputs.publish-on-discord && github.event_name != 'pull_request' }}
         uses: tsickert/discord-webhook@b217a69502f52803de774ded2b1ab7c282e99645 # ratchet:tsickert/discord-webhook@v7.0.0
         with:
           webhook-url: ${{ secrets.WEBHOOK_URL }}
