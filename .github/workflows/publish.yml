@@ -63,6 +63,10 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     permissions:
       contents: read
+    env:
+      GRADLE_OPTS: >-
+        -Dorg.gradle.caching=true
+        -Dorg.gradle.parallel=true
 
     steps:
       - name: Checkout
@@ -83,7 +87,6 @@ jobs:
           distribution: ${{ inputs.java-distribution }}
           server-id: github
           settings-path: ${{ github.workspace }}
-          cache: "gradle"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # ratchet:gradle/actions@v6.3.0
