@@ -37,30 +37,38 @@ That gets you:
 - a development build off the default branch, tagged `-DEV` with the short SHA
 - a JUnit test summary in the job summary
 - a Discord message that posts as **build running** and is edited in place into **passed** or
-  **failed**, showing the change, the result, tests, duration and built jar
+  **failed**, showing the included changes, test result, duration and built jar
 
 <details>
 <summary>What the Discord message looks like</summary>
 
-```
-🔨 Build running                                    ← posted when the build starts
-zMenu
+````
+### __zMenu__ | Build running 🔨                    ← posted when the build starts
 ─────────────────────────────────────────────
-`fix: correct the inventory click handler`
-Started just now
-[ View details ]
+**4** commit(s) in this build:
+```diff
++ abc1234: fix: correct the inventory click handler
++ 9f2e1a0: feat: add /zmenu reload
+```
+─────────────────────────────────────────────
+> -# Started just now.
+[ 🚀 View the run ] [ 🔗 View the commit ]
 
                     ↓ the same message is edited when the build finishes
 
-✅ Build passed
-zMenu
+### __zMenu__ | Build passed ✅
 ─────────────────────────────────────────────
-`fix: correct the inventory click handler`
-Checks: 38 tests, all passing
-Completed in: 1m 3s
-📎 zMenu-1.0.0.jar
-[ View details ]
+**4** commit(s) in this build:
+```diff
++ abc1234: fix: correct the inventory click handler
++ 9f2e1a0: feat: add /zmenu reload
 ```
+─────────────────────────────────────────────
+**Checks:** 38 tests, all passing
+**Completed in:** 1m 3s
+[ 🚀 View the run ] [ 🔗 View the commit ]
+📎 zMenu-1.0.0.jar
+````
 
 </details>
 
@@ -96,7 +104,15 @@ jobs:
           webhook: ${{ secrets.WEBHOOK_URL }}
           status: success
           file: ${{ steps.jar.outputs.path }}
-          values: '{"project": "zMenu", "subject": "done"}'
+          values: |
+            {
+              "project": "zMenu",
+              "commits": "1",
+              "changelog": "Build completed",
+              "tests": "not run",
+              "duration": "—",
+              "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
 ```
 
 ---
