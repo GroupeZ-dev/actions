@@ -1,0 +1,101 @@
+name: "Commit metadata"
+description: >-
+  Collect the commit subject, author, short SHA and a pre-rendered pull request link for use in
+  notifications and job summaries.
+
+inputs:
+  subject-source:
+    description: >-
+      Where the subject comes from. `auto` prefers the pull request title, because on a PR the
+      checked-out HEAD is a synthetic merge commit whose subject is "Merge <sha> into <sha>" and
+      is useless in a notification. `commit` always reads the commit, `pr` fails over to the
+      commit only when there is no PR.
+    required: false
+    default: "auto"
+  avatar-size:
+    description: "Pixel size for the actor avatar URL."
+    required: false
+    default: "64"
+
+outputs:
+  subject:
+    description: "Commit subject or pull request title, newlines collapsed."
+    value: ${{ steps.meta.outputs.subject }}
+  author:
+    description: "Commit author name."
+    value: ${{ steps.meta.outputs.author }}
+  sha-short:
+    description: "Abbreviated commit SHA."
+    value: ${{ steps.meta.outputs.sha-short }}
+  pr-number:
+    description: "Pull request number, empty on a push."
+    value: ${{ steps.meta.outputs.pr-number }}
+  pr-url:
+    description: "Pull request URL, empty on a push."
+    value: ${{ steps.meta.outputs.pr-url }}
+  pr-suffix:
+    description: >-
+      Pre-rendered markdown fragment such as " · [#12](https://…)", empty on a push. Notification
+      templates are static JSON, so a conditional link is far simpler as a string that is simply
+      empty than as a component that must be added or removed.
+    value: ${{ steps.meta.outputs.pr-suffix }}
+  actor-avatar:
+    description: "Avatar URL for the triggering actor."
+    value: ${{ steps.meta.outputs.actor-avatar }}
+  commit-url:
+    description: "URL of the commit."
+    value: ${{ steps.meta.outputs.commit-url }}
+  run-url:
+    description: "URL of this workflow run."
+    value: ${{ steps.meta.outputs.run-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: meta
+      shell: bash
+      env:
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        SUBJECT_SOURCE: ${{ inputs.subject-source }}
+        AVATAR_SIZE: ${{ inputs.avatar-size }}
+        SERVER_URL: ${{ github.server_url }}
+        REPOSITORY: ${{ github.repository }}
+        ACTOR_ID: ${{ github.actor_id }}
+        RUN_ID: ${{ github.run_id }}
+        COMMIT_SHA: ${{ github.sha }}
+      run: |
+        set -uo pipefail
+
+        case "$SUBJECT_SOURCE" in
+          commit) SUBJECT=$(git log -1 --pretty=%s) ;;
+          *)      if [ -n "${PR_TITLE:-}" ]; then SUBJECT="$PR_TITLE"; else SUBJECT=$(git log -1 --pretty=%s); fi ;;
+        esac
+
+        # A multi-line subject would break the key=value format of $GITHUB_OUTPUT and let extra
+        # step outputs be injected.
+        SUBJECT=$(printf '%s' "$SUBJECT" | tr '\r\n' '  ')
+
+        {
+          echo "subject=$SUBJECT"
+          echo "author=$(git log -1 --pretty=%an | tr -d '\r\n')"
+          echo "sha-short=$(git rev-parse --short HEAD)"
+          echo "actor-avatar=https://avatars.githubusercontent.com/u/${ACTOR_ID}?size=${AVATAR_SIZE}"
+          echo "commit-url=${SERVER_URL}/${REPOSITORY}/commit/${COMMIT_SHA}"
+          echo "run-url=${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ -n "${PR_NUMBER:-}" ]; then
+          PR_URL="${SERVER_URL}/${REPOSITORY}/pull/${PR_NUMBER}"
+          {
+            echo "pr-number=${PR_NUMBER}"
+            echo "pr-url=${PR_URL}"
+            echo "pr-suffix= · [#${PR_NUMBER}](${PR_URL})"
+          } >> "$GITHUB_OUTPUT"
+        else
+          {
+            echo "pr-number="
+            echo "pr-url="
+            echo "pr-suffix="
+          } >> "$GITHUB_OUTPUT"
+        fi

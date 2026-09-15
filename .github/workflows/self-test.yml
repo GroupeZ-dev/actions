@@ -1,0 +1,269 @@
+name: Self test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+jobs:
+  lint:
+    name: Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7.0.1
+
+      - name: Static audit
+        run: python3 .github/audit.py
+
+      - name: Template render test
+        run: python3 .github/render-test.py
+
+      # Installed from the project's own release rather than a third-party wrapper action, so
+      # there is no unpinned dependency to audit.
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.7"
+        run: |
+          set -euo pipefail
+          URL="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSLo actionlint.tar.gz "$URL"
+          tar -xzf actionlint.tar.gz actionlint
+          ./actionlint -color
+
+  actions:
+    name: ${{ matrix.tool }} fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tool: gradle
+            dir: test/fixtures/gradle
+            # The fixtures carry no wrapper, so the command names the tool directly.
+            # setup-gradle puts `gradle` on PATH; `mvn` is preinstalled on the runner.
+            command: "gradle build"
+            expect-jar: "gradle-fixture-1.0.0-DEV.jar"
+          - tool: maven
+            dir: test/fixtures/maven
+            command: "mvn -B --no-transfer-progress verify"
+            expect-jar: "maven-fixture-1.0.0-DEV.jar"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Commit metadata
+        id: meta
+        uses: ./.github/actions/commit-metadata
+
+      - name: Changelog
+        id: changelog
+        uses: ./.github/actions/changelog
+        with:
+          budget: 400
+
+      - name: Setup build
+        id: setup
+        uses: ./.github/actions/setup-build
+        with:
+          java-version: "21"
+          working-directory: ${{ matrix.dir }}
+
+      - name: Build
+        id: build
+        uses: ./.github/actions/run-build
+        with:
+          command: ${{ matrix.command }}
+          working-directory: ${{ matrix.dir }}
+          # Force the development path so the -Darchive.classifier=DEV property is exercised.
+          default-branch: "this-branch-does-not-exist"
+
+      - name: Test summary
+        id: tests
+        if: always()
+        uses: ./.github/actions/test-summary
+        with:
+          build-tool: ${{ steps.setup.outputs.build-tool }}
+          working-directory: ${{ matrix.dir }}
+
+      - name: Find artifacts
+        id: artifacts
+        uses: ./.github/actions/find-artifacts
+        with:
+          build-tool: ${{ steps.setup.outputs.build-tool }}
+          working-directory: ${{ matrix.dir }}
+          fail-if-none: "true"
+
+      - name: Assert outcomes
+        env:
+          TOOL: ${{ steps.setup.outputs.build-tool }}
+          EXPECTED_TOOL: ${{ matrix.tool }}
+          EXPECT_JAR: ${{ matrix.expect-jar }}
+          ARTIFACT_NAME: ${{ steps.artifacts.outputs.name }}
+          ARTIFACT_COUNT: ${{ steps.artifacts.outputs.count }}
+          TESTS: ${{ steps.tests.outputs.tests }}
+          PASSED: ${{ steps.tests.outputs.passed }}
+          TEST_SUMMARY: ${{ steps.tests.outputs.summary }}
+          IS_DEFAULT: ${{ steps.build.outputs.is-default-branch }}
+          SHA_SHORT: ${{ steps.meta.outputs.sha-short }}
+          SUBJECT: ${{ steps.meta.outputs.subject }}
+          CHANGELOG_COUNT: ${{ steps.changelog.outputs.count }}
+          CHANGELOG_BLOCK: ${{ steps.changelog.outputs.block }}
+        run: |
+          set -uo pipefail
+          FAIL=0
+          check() {
+            if [ "$2" = "$3" ]; then
+              echo "  ok    $1: $2"
+            else
+              echo "  FAIL  $1: expected '$3', got '$2'"
+              FAIL=1
+            fi
+          }
+          nonempty() {
+            if [ -n "$2" ]; then
+              echo "  ok    $1: $2"
+            else
+              echo "  FAIL  $1 is empty"
+              FAIL=1
+            fi
+          }
+
+          echo "build tool detection"
+          check "resolved tool" "$TOOL" "$EXPECTED_TOOL"
+
+          echo "artifact discovery"
+          check "artifact name" "$ARTIFACT_NAME" "$EXPECT_JAR"
+          check "artifact count (sources/javadoc excluded)" "$ARTIFACT_COUNT" "1"
+
+          echo "test summary"
+          check "tests parsed" "$TESTS" "2"
+          check "all passing" "$PASSED" "true"
+          nonempty "summary" "$TEST_SUMMARY"
+
+          echo "branch handling"
+          check "is-default-branch" "$IS_DEFAULT" "false"
+
+          echo "commit metadata"
+          nonempty "sha-short" "$SHA_SHORT"
+          nonempty "subject" "$SUBJECT"
+
+          echo "changelog"
+          nonempty "count" "$CHANGELOG_COUNT"
+          case "$CHANGELOG_BLOCK" in
+            '```diff'*) echo "  ok    block is a fenced diff" ;;
+            *) echo "  FAIL  block is not a fenced diff: $CHANGELOG_BLOCK"; FAIL=1 ;;
+          esac
+
+          exit $FAIL
+
+  discord:
+    name: Discord notify
+    runs-on: ubuntu-latest
+    # The secrets context is not available in a step-level `if:`, so it is surfaced as job env.
+    env:
+      SELFTEST_WEBHOOK: ${{ secrets.SELFTEST_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7.0.1
+
+      # With no webhook the action must succeed and emit an empty message id. This is the path
+      # every forked pull request takes, so it has to stay green.
+      - name: No webhook is a clean no-op
+        id: noop
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook: ""
+          status: start
+
+      - name: Assert no-op
+        env:
+          MESSAGE_ID: ${{ steps.noop.outputs.message-id }}
+        run: |
+          if [ -n "$MESSAGE_ID" ]; then
+            echo "expected an empty message id, got '$MESSAGE_ID'"
+            exit 1
+          fi
+          echo "ok: no-op returned an empty message id"
+
+      # Real delivery only runs where the secret exists, which excludes forks.
+      - name: Post, then edit in place
+        id: start
+        if: ${{ env.SELFTEST_WEBHOOK != '' }}
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook: ${{ env.SELFTEST_WEBHOOK }}
+          status: start
+          values: |
+            {
+              "repo": ${{ toJSON(github.repository) }},
+              "workflow": "Self test",
+              "attempt": ${{ toJSON(github.run_attempt) }},
+              "java": "21",
+              "subject": "self-test: post then edit",
+              "actor": ${{ toJSON(github.actor) }},
+              "avatar": "https://avatars.githubusercontent.com/u/${{ github.actor_id }}?size=64",
+              "event": ${{ toJSON(github.event_name) }},
+              "ref": ${{ toJSON(github.ref_name) }},
+              "sha": "0000000",
+              "author": "self-test",
+              "pr": "",
+              "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "commit_url": "${{ github.server_url }}/${{ github.repository }}"
+            }
+
+      - name: Edit the same message with an attachment
+        id: result
+        if: ${{ env.SELFTEST_WEBHOOK != '' }}
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook: ${{ env.SELFTEST_WEBHOOK }}
+          status: success
+          message-id: ${{ steps.start.outputs.message-id }}
+          file: README.md
+          values: |
+            {
+              "repo": ${{ toJSON(github.repository) }},
+              "workflow": "Self test",
+              "attempt": ${{ toJSON(github.run_attempt) }},
+              "java": "21",
+              "subject": "self-test: post then edit",
+              "actor": ${{ toJSON(github.actor) }},
+              "avatar": "https://avatars.githubusercontent.com/u/${{ github.actor_id }}?size=64",
+              "event": ${{ toJSON(github.event_name) }},
+              "ref": ${{ toJSON(github.ref_name) }},
+              "sha": "0000000",
+              "author": "self-test",
+              "pr": "",
+              "tests": "2 tests, all passing",
+              "duration": "0s",
+              "commits": "1",
+              "changelog": "```diff\n+ 0000000: self-test\n```",
+              "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "commit_url": "${{ github.server_url }}/${{ github.repository }}"
+            }
+
+      - name: Assert the message was edited, not duplicated
+        if: ${{ env.SELFTEST_WEBHOOK != '' }}
+        env:
+          START_ID: ${{ steps.start.outputs.message-id }}
+          RESULT_ID: ${{ steps.result.outputs.message-id }}
+        run: |
+          if [ -z "$START_ID" ]; then
+            echo "start message was not posted"
+            exit 1
+          fi
+          if [ "$START_ID" != "$RESULT_ID" ]; then
+            echo "expected the result to edit $START_ID, but it posted $RESULT_ID"
+            exit 1
+          fi
+          echo "ok: one message transitioned in place ($START_ID)"

@@ -1,0 +1,346 @@
+name: "Discord notify"
+description: >-
+  Render a Discord Components V2 payload from a template and post it, edit an existing message,
+  or attach a build artifact to it.
+
+inputs:
+  webhook:
+    description: "Discord webhook URL. When empty the action does nothing and succeeds."
+    required: false
+    default: ""
+  status:
+    description: >-
+      Selects one of the built-in templates: start, success or failure. Ignored when `template`
+      or `template-json` is set.
+    required: false
+    default: ""
+  template:
+    description: >-
+      Path to a JSON template containing {placeholder} tokens, relative to the workspace.
+      Overrides `status`, so a consumer can supply their own house style.
+    required: false
+    default: ""
+  template-json:
+    description: "Raw inline JSON template. Overrides both `template` and `status`."
+    required: false
+    default: ""
+  values:
+    description: "JSON object of placeholder name to replacement value."
+    required: false
+    default: "{}"
+  title:
+    description: "Heading for the {title} placeholder. Defaults per `status` when empty."
+    required: false
+    default: ""
+  accent:
+    description: "Accent colour for the {accent} placeholder, as a decimal integer. Defaults per `status`."
+    required: false
+    default: ""
+  message-id:
+    description: "Existing message to edit. When empty, a new message is posted."
+    required: false
+    default: ""
+  username:
+    description: >-
+      Display name to post under, overriding the webhook's configured name. Applied only when
+      creating a message: Discord does not accept username on an edit, so a message that is
+      later edited keeps the name it was posted with. Empty uses the webhook's own name.
+    required: false
+    default: ""
+  avatar-url:
+    description: >-
+      Avatar image URL to post with, overriding the webhook's configured avatar. Same
+      create-only restriction as `username`. Empty uses the webhook's own avatar.
+    required: false
+    default: ""
+  file:
+    description: >-
+      Path to a file to attach. A File component referencing it is injected into the payload,
+      because Discord discards an attachment no component references once the Components V2
+      flag is set. Empty attaches nothing.
+    required: false
+    default: ""
+  file-max-bytes:
+    description: >-
+      Skip the attachment when the file exceeds this size, rather than failing. Discord's webhook
+      limit is 10 MiB on an unboosted guild.
+    required: false
+    default: "9437184"
+  strip-unknown-placeholders:
+    description: "Blank out any {placeholder} the values object did not supply."
+    required: false
+    default: "true"
+  fail-on-error:
+    description: "Exit non-zero when Discord rejects the message. The step still goes red either way."
+    required: false
+    default: "true"
+
+outputs:
+  message-id:
+    description: "The id of the posted or edited message, empty if nothing was sent."
+    value: ${{ steps.send.outputs.message-id }}
+
+runs:
+  using: composite
+  steps:
+    - id: send
+      shell: bash
+      env:
+        WEBHOOK: ${{ inputs.webhook }}
+        STATUS: ${{ inputs.status }}
+        TEMPLATE: ${{ inputs.template }}
+        TEMPLATE_JSON: ${{ inputs.template-json }}
+        VALUES: ${{ inputs.values }}
+        TITLE: ${{ inputs.title }}
+        ACCENT: ${{ inputs.accent }}
+        MESSAGE_ID: ${{ inputs.message-id }}
+        USERNAME: ${{ inputs.username }}
+        AVATAR_URL: ${{ inputs.avatar-url }}
+        ATTACH_FILE: ${{ inputs.file }}
+        FILE_MAX_BYTES: ${{ inputs.file-max-bytes }}
+        STRIP_UNKNOWN: ${{ inputs.strip-unknown-placeholders }}
+        FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -uo pipefail
+
+        # A forked pull request gets no secrets, so an empty webhook is the expected state
+        # rather than a misconfiguration. Succeed quietly.
+        if [ -z "$WEBHOOK" ]; then
+          echo "No webhook configured (expected on forked pull requests) - skipping."
+          echo "message-id=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        WORKDIR=$(mktemp -d)
+        TPL="$WORKDIR/template.json"
+
+        # Template precedence: inline JSON, then a workspace path, then a built-in by status.
+        # The built-ins live next to this action, which is NOT the caller's workspace, so they
+        # are addressed through $GITHUB_ACTION_PATH.
+        if [ -n "$TEMPLATE_JSON" ]; then
+          printf '%s' "$TEMPLATE_JSON" > "$TPL"
+          echo "Template: inline JSON."
+        elif [ -n "$TEMPLATE" ]; then
+          if [ ! -f "$TEMPLATE" ]; then
+            echo "::error::Template not found: $TEMPLATE"
+            exit 1
+          fi
+          cp "$TEMPLATE" "$TPL"
+          echo "Template: $TEMPLATE"
+        elif [ -n "$STATUS" ]; then
+          BUILTIN="$ACTION_PATH/templates/$STATUS.json"
+          if [ ! -f "$BUILTIN" ]; then
+            echo "::error::No built-in template for status '$STATUS'. Expected start, success or failure."
+            exit 1
+          fi
+          cp "$BUILTIN" "$TPL"
+          echo "Template: built-in '$STATUS'."
+        else
+          echo "::error::Set one of 'status', 'template' or 'template-json'."
+          exit 1
+        fi
+
+        if ! jq -e . "$TPL" > /dev/null 2>&1; then
+          echo "::error::Template is not valid JSON."
+          exit 1
+        fi
+
+        # Per-status defaults for the two presentation placeholders, so colour and heading are
+        # reachable without replacing the whole template. Explicit inputs win over these, and
+        # anything already in `values` wins over both.
+        case "$STATUS" in
+          start)   DEF_TITLE="🔨 Build running" ; DEF_ACCENT=15844367 ;;
+          success) DEF_TITLE="✅ Build passed"   ; DEF_ACCENT=3066993  ;;
+          failure) DEF_TITLE="❌ Build failed"   ; DEF_ACCENT=15158332 ;;
+          *)       DEF_TITLE="Build"            ; DEF_ACCENT=5793266  ;;
+        esac
+        [ -n "$TITLE" ] && DEF_TITLE="$TITLE"
+        [ -n "$ACCENT" ] && DEF_ACCENT="$ACCENT"
+
+        # Attachment is resolved BEFORE rendering so that {attachment} is an ordinary
+        # placeholder. A template can then place the File component wherever it likes, and the
+        # post-processing below only has to fill in or remove what the template declared.
+        SEND_FILE=""
+        ATTACH_URL=""
+        ATTACH_NAME=""
+        OVERSIZE_NOTE=""
+        if [ -n "$ATTACH_FILE" ]; then
+          if [ ! -f "$ATTACH_FILE" ]; then
+            echo "::warning::Attachment not found, sending without it: $ATTACH_FILE"
+          else
+            SIZE=$(wc -c < "$ATTACH_FILE" | tr -d '[:space:]')
+            ATTACH_NAME=$(basename "$ATTACH_FILE")
+            if [ "$SIZE" -gt "$FILE_MAX_BYTES" ]; then
+              # Integer division alone reports a 900 KiB file as "0 MiB", so keep one decimal
+              # and fall back to KiB below a megabyte.
+              if [ "$SIZE" -ge 1048576 ]; then
+                SIZE_TEXT="$(( SIZE / 1048576 )).$(( (SIZE % 1048576) * 10 / 1048576 )) MiB"
+              else
+                SIZE_TEXT="$(( SIZE / 1024 )) KiB"
+              fi
+              echo "::notice::Attachment is ${SIZE_TEXT}, over the ${FILE_MAX_BYTES} byte limit - sending a note instead."
+              OVERSIZE_NOTE="-# \`${ATTACH_NAME}\` is ${SIZE_TEXT} and too large to attach; download it from the run."
+              ATTACH_NAME=""
+            else
+              SEND_FILE="$ATTACH_FILE"
+              ATTACH_URL="attachment://${ATTACH_NAME}"
+              echo "Attaching $ATTACH_NAME (${SIZE} bytes)."
+            fi
+          fi
+        fi
+
+        if ! printf '%s' "$VALUES" | jq -e . > /dev/null 2>&1; then
+          echo "::error::'values' is not valid JSON."
+          exit 1
+        fi
+
+        printf '%s' "$VALUES" \
+          | jq --arg t "$DEF_TITLE" --argjson a "$DEF_ACCENT" --arg att "$ATTACH_URL" \
+              '{title: $t, accent: $a, attachment: $att} + .' > "$WORKDIR/values.json"
+
+        # Substitution is deliberately regex-free: split/join on a literal separator, never gsub,
+        # because gsub interprets the *replacement* string and a commit subject or branch name
+        # containing \ $ & ( ) would corrupt the payload. Values arrive via --argjson so jq owns
+        # all JSON escaping.
+        #
+        # A string that is exactly one placeholder is replaced with the raw typed value, which is
+        # what lets "accent_color": "{accent}" render as a JSON number rather than a string.
+        jq --argjson vals "$(cat "$WORKDIR/values.json")" '
+          def render($vals):
+            walk(
+              if type == "string" then
+                . as $s
+                | ([$vals | to_entries[] | select("{" + .key + "}" == $s)]) as $exact
+                | if ($exact | length) > 0 then
+                    $exact[0].value
+                  else
+                    reduce ($vals | to_entries[]) as $e (
+                      .;
+                      split("{" + $e.key + "}") | join($e.value | tostring)
+                    )
+                  end
+              else . end
+            );
+          render($vals)
+        ' "$TPL" > "$WORKDIR/payload.json"
+
+        # Blank out placeholders the caller did not supply, so a partially filled template does
+        # not ship a literal "{tests}" to the channel. The replacement is empty, so there is no
+        # backreference for the regex engine to reinterpret.
+        if [ "$STRIP_UNKNOWN" = "true" ]; then
+          jq 'walk(if type == "string" then gsub("\\{[a-z0-9_]+\\}"; "") else . end)' \
+            "$WORKDIR/payload.json" > "$WORKDIR/payload.stripped.json" \
+            && mv "$WORKDIR/payload.stripped.json" "$WORKDIR/payload.json"
+        fi
+
+        if ! jq -e . "$WORKDIR/payload.json" > /dev/null; then
+          echo "::error::Rendered payload is not valid JSON"
+          exit 1
+        fi
+
+        # Reconcile the payload with what is actually being sent.
+        #
+        # Discord discards an attachment that no component references once IS_COMPONENTS_V2
+        # (32768) is set, and rejects a File component pointing at an attachment that was not
+        # uploaded. Both directions therefore have to be repaired:
+        #
+        #   file present, template declared {attachment} -> already correct, add `attachments`
+        #   file present, template said nothing          -> insert a File before the buttons
+        #   no file, template declared {attachment}       -> drop the now-empty File component
+        #
+        # New components are inserted *before* the first ActionRow rather than appended, so the
+        # buttons stay the last thing in the container. Appending put the jar underneath them.
+        jq --arg url "$ATTACH_URL" --arg name "$ATTACH_NAME" --arg note "$OVERSIZE_NOTE" '
+          def insert_before_buttons($comp):
+            if (.components | length) > 0 and (.components[-1].type == 17) then
+              .components[-1].components as $inner
+              | (($inner | map(.type == 1) | index(true)) // ($inner | length)) as $i
+              | .components[-1].components = ($inner[0:$i] + [$comp] + $inner[$i:])
+            else
+              .components as $outer
+              | (($outer | map(.type == 1) | index(true)) // ($outer | length)) as $i
+              | .components = ($outer[0:$i] + [$comp] + $outer[$i:])
+            end;
+
+          def has_file_component:
+            [.. | objects | select(.type == 13 and ((.file.url // "") != ""))] | length > 0;
+
+          def drop_empty_file_components:
+            walk(
+              if type == "array" then
+                map(select(
+                  if type == "object" and .type == 13
+                  then ((.file.url // "") != "")
+                  else true end
+                ))
+              else . end
+            );
+
+          if $url != "" then
+            . + {attachments: [{id: 0, filename: $name}]}
+            | if has_file_component then . else insert_before_buttons({type: 13, file: {url: $url}, spoiler: false}) end
+          else
+            drop_empty_file_components
+            | if $note != "" then insert_before_buttons({type: 10, content: $note}) else . end
+          end
+        ' "$WORKDIR/payload.json" > "$WORKDIR/p.json" && mv "$WORKDIR/p.json" "$WORKDIR/payload.json"
+
+        # username and avatar_url are Execute Webhook params and are NOT in Edit Webhook
+        # Message's editable set, so they go into a separate body used only for POST. A message
+        # therefore keeps the identity it was posted with.
+        jq --arg username "$USERNAME" --arg avatar "$AVATAR_URL" '
+          . + (if $username == "" then {} else {username: $username} end)
+            + (if $avatar   == "" then {} else {avatar_url: $avatar} end)
+        ' "$WORKDIR/payload.json" > "$WORKDIR/payload.post.json"
+
+        # with_components=true on BOTH verbs is load-bearing: it defaults to false, and without
+        # it Discord discards the entire components array and answers 50006 "Cannot send an
+        # empty message".
+        send() {
+          local method="$1" url="$2" body="$3"
+          if [ -n "$SEND_FILE" ]; then
+            curl -sS -X "$method" "$url" \
+              -F "payload_json=<$body" \
+              -F "files[0]=@$SEND_FILE;filename=$(basename "$SEND_FILE")" \
+              --max-time 120 --retry 2 --retry-connrefused
+          else
+            curl -sS -X "$method" "$url" \
+              -H "Content-Type: application/json" \
+              --data @"$body" \
+              --max-time 30 --retry 2 --retry-connrefused
+          fi
+        }
+
+        post_new() {
+          send POST "$WEBHOOK?wait=true&with_components=true" "$WORKDIR/payload.post.json"
+        }
+
+        RESPONSE=""
+        if [ -n "$MESSAGE_ID" ]; then
+          RESPONSE=$(send PATCH "$WEBHOOK/messages/$MESSAGE_ID?with_components=true" "$WORKDIR/payload.json")
+          if printf '%s' "$RESPONSE" | jq -e '.id' > /dev/null 2>&1; then
+            echo "message-id=$MESSAGE_ID" >> "$GITHUB_OUTPUT"
+            echo "Edited message $MESSAGE_ID."
+            exit 0
+          fi
+          # Editing keeps one message that transitions running -> result. If the edit fails
+          # (message deleted, stale id, or the secret appeared mid-run) posting a fresh message
+          # beats reporting nothing.
+          echo "::warning::Editing message $MESSAGE_ID failed; posting a new message instead."
+          RESPONSE=$(post_new)
+        else
+          RESPONSE=$(post_new)
+        fi
+
+        NEW_ID=$(printf '%s' "$RESPONSE" | jq -r '.id // empty' 2>/dev/null)
+        echo "message-id=$NEW_ID" >> "$GITHUB_OUTPUT"
+
+        if [ -z "$NEW_ID" ]; then
+          echo "::error::Discord rejected the message. Response: $(printf '%s' "$RESPONSE" | head -c 500)"
+          if [ "$FAIL_ON_ERROR" = "true" ]; then
+            exit 1
+          fi
+          exit 0
+        fi
+        echo "Sent message $NEW_ID."

@@ -3,6 +3,7 @@ name: Build Action
 on:
   workflow_call:
     inputs:
+      # --- Project metadata ---
       project-name:
         description: "Project Name (e.g. zMenu)"
         required: true
@@ -17,31 +18,6 @@ on:
         required: false
         type: string
         default: "temurin"
-      publish:
-        description: "If a package should be publish through ghcr.io"
-        required: false
-        type: boolean
-        default: false
-      project-to-publish:
-        description: "Name of the project to publish (e.g. API:publish)"
-        required: false
-        type: string
-        default: "publish"
-      build-command:
-        description: "Optional build command to run (default to ./gradlew build)"
-        required: false
-        type: string
-        default: "./gradlew build"
-      publish-on-discord:
-        description: "If a message should be sent to discord on build completion"
-        required: false
-        type: boolean
-        default: true
-      discord-avatar-url:
-        description: "Avatar url (default to zMenu avatar)"
-        required: false
-        type: string
-        default: "https://minecraft-inventory-builder.com/storage/images/9UgcfGZyrmbVrXw5lbj5kXq6fW8F4nhwj6Cx4nVG.png"
       default-branch:
         description: "Default branch to check for releases"
         required: false
@@ -52,100 +28,525 @@ on:
         required: false
         type: string
         default: "['ubuntu-latest']"
+
+      # --- Build configuration ---
+      build-tool:
+        description: "`auto`, `gradle` or `maven`. `auto` detects from the repository layout."
+        required: false
+        type: string
+        default: "auto"
+      build-command:
+        description: >-
+          Optional build command to run. Empty resolves per build tool:
+          Gradle `./gradlew build`, Maven `./mvnw -B --no-transfer-progress verify`.
+        required: false
+        type: string
+        default: ""
+      dev-args:
+        description: "Arguments appended off the default branch. {sha} is substituted."
+        required: false
+        type: string
+        default: "-Darchive.classifier=DEV -Dgithub.sha={sha}"
+      release-args:
+        description: "Arguments appended on the default branch. {sha} is substituted."
+        required: false
+        type: string
+        default: ""
+      working-directory:
+        description: "Directory to build in"
+        required: false
+        type: string
+        default: "."
+      gradle-opts:
+        description: "Value for GRADLE_OPTS"
+        required: false
+        type: string
+        default: "-Dorg.gradle.caching=true -Dorg.gradle.parallel=true"
+      cache:
+        description: "Enable dependency caching"
+        required: false
+        type: boolean
+        default: true
+      timeout-minutes:
+        description: "Job timeout. A hung build would otherwise burn the full 6 hour default."
+        required: false
+        type: number
+        default: 20
+      fetch-depth:
+        description: >-
+          Checkout depth. The changelog walks a commit range and cannot resolve one from a
+          shallow clone, so 0 is the default.
+        required: false
+        type: number
+        default: 0
+
+      # --- Publishing configuration ---
+      publish:
+        description: "If a package should be published to maven"
+        required: false
+        type: boolean
+        default: false
+      project-to-publish:
+        description: "Name of the project to publish (e.g. API:publish)"
+        required: false
+        type: string
+        default: "publish"
+      publish-command:
+        description: >-
+          Command used for publishing. Empty resolves per build tool, with `project-to-publish`
+          appended as the task.
+        required: false
+        type: string
+        default: ""
+      publish-release-args:
+        description: "Arguments appended to the publish command on the default branch."
+        required: false
+        type: string
+        default: "-Drepository.name=releases"
+
+      # --- Artifacts configuration ---
+      artifact-glob:
+        description: >-
+          Glob for build output. Empty resolves per build tool: Maven `**/target/*.jar`,
+          Gradle `**/build/libs/*.jar`.
+        required: false
+        type: string
+        default: ""
+      artifact-exclude:
+        description: "Comma-separated filename patterns to exclude from the artifact search."
+        required: false
+        type: string
+        default: "*-sources.jar,*-javadoc.jar,original-*.jar"
+      upload-artifact:
+        description: "`pr-only`, `always` or `never`."
+        required: false
+        type: string
+        default: "pr-only"
+      artifact-path:
+        description: "Path uploaded to GitHub Actions artifacts. Empty uses the build output directory."
+        required: false
+        type: string
+        default: ""
+      artifact-retention-days:
+        description: "Retention for uploaded artifacts."
+        required: false
+        type: number
+        default: 7
+
+      # --- Discord configuration ---
+      publish-on-discord:
+        description: "If a message should be sent to discord on build completion"
+        required: false
+        type: boolean
+        default: true
+      discord-notify-on:
+        description: >-
+          `push` notifies only outside pull requests (the historical behaviour), `always`
+          notifies everywhere, `never` disables notifications.
+        required: false
+        type: string
+        default: "push"
+      discord-lifecycle:
+        description: >-
+          `edit` posts a "build running" message and edits it into the result, so one message
+          transitions in place. `result-only` posts a single message at the end.
+        required: false
+        type: string
+        default: "edit"
+      discord-username:
+        description: "Webhook display name. Empty uses the project name."
+        required: false
+        type: string
+        default: ""
+      discord-avatar-url:
+        description: >-
+          Webhook avatar. Defaults to the GroupeZ-dev GitHub organisation avatar, which is always
+          reachable; Discord silently falls back to the webhook's own picture when a URL 404s.
+        required: false
+        type: string
+        default: "https://github.com/GroupeZ-dev.png"
+      discord-templates-dir:
+        description: >-
+          Directory in the calling repository holding start.json, success.json and failure.json.
+          Empty uses the templates shipped with this action.
+        required: false
+        type: string
+        default: ""
+      discord-attach-jar:
+        description: "Attach the built jar to the Discord message."
+        required: false
+        type: boolean
+        default: true
+      discord-file-max-bytes:
+        description: "Skip the attachment above this size rather than failing."
+        required: false
+        type: number
+        default: 9437184
+
+      # --- Changelog configuration ---
+      changelog-enabled:
+        description: "Include a commit changelog in the notification."
+        required: false
+        type: boolean
+        default: true
+      changelog-budget:
+        description: "Maximum characters for the rendered changelog."
+        required: false
+        type: number
+        default: 1500
+      changelog-format:
+        description: "`diff`, `markdown` or `plain`."
+        required: false
+        type: string
+        default: "diff"
+      changelog-exclude-pattern:
+        description: "Extended regex; matching commit subjects are dropped."
+        required: false
+        type: string
+        default: ""
+
+      # --- Misc configuration ---
+      run-tests-summary:
+        description: "Parse JUnit reports and report test counts."
+        required: false
+        type: boolean
+        default: true
+      actions-ref:
+        description: >-
+          Ref of GroupeZ-dev/actions to load the composite actions from. Pin this to the same
+          tag you call this workflow with.
+        required: false
+        type: string
+        default: "main"
+
     secrets:
       WEBHOOK_URL:
         description: "Discord webhook url"
-        required: true
+        required: false
+      DISCORD_WEBHOOK_URL:
+        description: "Discord webhook url (alias for WEBHOOK_URL)"
+        required: false
       MAVEN_USERNAME:
         description: "Maven Username"
-        required: true
+        required: false
       MAVEN_PASSWORD:
         description: "Maven password"
-        required: true
+        required: false
+
+    outputs:
+      artifact-path:
+        description: "Path to the primary build artifact."
+        value: ${{ jobs.build.outputs.artifact-path }}
+      artifact-name:
+        description: "Filename of the primary build artifact."
+        value: ${{ jobs.build.outputs.artifact-name }}
+      test-summary:
+        description: "One-line test result summary."
+        value: ${{ jobs.build.outputs.test-summary }}
+      is-default-branch:
+        description: "Whether the run was on the default branch."
+        value: ${{ jobs.build.outputs.is-default-branch }}
+      discord-message-id:
+        description: "Id of the Discord message that was posted or edited."
+        value: ${{ jobs.build.outputs.discord-message-id }}
 
 jobs:
   build:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read
       packages: write
+
+    concurrency:
+      group: groupez-build-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref_name != inputs.default-branch }}
+
     env:
-      GRADLE_OPTS: >-
-        -Dorg.gradle.caching=true
-        -Dorg.gradle.parallel=true
+      WEBHOOK: ${{ secrets.WEBHOOK_URL || secrets.DISCORD_WEBHOOK_URL }}
+      MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+      MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+      NOTIFY: ${{ inputs.publish-on-discord
+        && inputs.discord-notify-on != 'never'
+        && (inputs.discord-notify-on == 'always' || github.event_name != 'pull_request') }}
+
+    outputs:
+      artifact-path: ${{ steps.artifacts.outputs.path }}
+      artifact-name: ${{ steps.artifacts.outputs.name }}
+      test-summary: ${{ steps.tests.outputs.summary }}
+      is-default-branch: ${{ steps.build.outputs.is-default-branch }}
+      discord-message-id: ${{ steps.notify-result.outputs.message-id || steps.notify-start.outputs.message-id }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7.0.1
-
-      - name: Set IS_DEFAULT_BRANCH env var
-        run: |
-          if [ "${GITHUB_REF##*/}" = "${{ inputs.default-branch }}" ]; then
-            echo "IS_DEFAULT_BRANCH=true" >> "$GITHUB_ENV"
-          else
-            echo "IS_DEFAULT_BRANCH=false" >> "$GITHUB_ENV"
-          fi
-
-      - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # ratchet:actions/setup-java@v6.0.1
         with:
+          fetch-depth: ${{ inputs.fetch-depth }}
+
+      - name: Check out the actions toolkit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7.0.1
+        with:
+          repository: GroupeZ-dev/actions
+          ref: ${{ inputs.actions-ref }}
+          path: .groupez-actions
+
+      - name: Collect commit metadata
+        id: meta
+        uses: ./.groupez-actions/.github/actions/commit-metadata
+
+      - name: Build commit changelog
+        id: changelog
+        if: ${{ inputs.changelog-enabled }}
+        uses: ./.groupez-actions/.github/actions/changelog
+        with:
+          budget: ${{ inputs.changelog-budget }}
+          format: ${{ inputs.changelog-format }}
+          exclude-pattern: ${{ inputs.changelog-exclude-pattern }}
+
+      - name: Notify build started
+        id: notify-start
+        if: ${{ env.NOTIFY == 'true' && inputs.discord-lifecycle == 'edit' }}
+        continue-on-error: true
+        uses: ./.groupez-actions/.github/actions/discord-notify
+        with:
+          webhook: ${{ env.WEBHOOK }}
+          status: start
+          template: ${{ inputs.discord-templates-dir && format('{0}/start.json', inputs.discord-templates-dir) || '' }}
+          username: ${{ inputs.discord-username || inputs.project-name }}
+          avatar-url: ${{ inputs.discord-avatar-url }}
+          values: |
+            {
+              "project":        ${{ toJSON(inputs.project-name) }},
+              "repo":           ${{ toJSON(github.repository) }},
+              "repo_name":      ${{ toJSON(github.event.repository.name) }},
+              "repo_owner":     ${{ toJSON(github.repository_owner) }},
+              "repo_url":       "${{ github.server_url }}/${{ github.repository }}",
+              "workflow":       ${{ toJSON(github.workflow) }},
+              "event":          ${{ toJSON(github.event_name) }},
+              "attempt":        ${{ toJSON(github.run_attempt) }},
+              "run_id":         ${{ toJSON(github.run_id) }},
+              "run_number":     ${{ toJSON(github.run_number) }},
+              "url":            ${{ toJSON(steps.meta.outputs.run-url) }},
+              "ref":            ${{ toJSON(github.ref_name) }},
+              "ref_type":       ${{ toJSON(github.ref_type) }},
+              "default_branch": ${{ toJSON(inputs.default-branch) }},
+              "sha":            ${{ toJSON(steps.meta.outputs.sha-short) }},
+              "sha_full":       ${{ toJSON(github.sha) }},
+              "subject":        ${{ toJSON(steps.meta.outputs.subject) }},
+              "author":         ${{ toJSON(steps.meta.outputs.author) }},
+              "commit_url":     ${{ toJSON(steps.meta.outputs.commit-url) }},
+              "compare_url":    ${{ toJSON(steps.changelog.outputs.compare-url) }},
+              "pr":             ${{ toJSON(steps.meta.outputs.pr-suffix) }},
+              "pr_number":      ${{ toJSON(steps.meta.outputs.pr-number) }},
+              "pr_url":         ${{ toJSON(steps.meta.outputs.pr-url) }},
+              "actor":          ${{ toJSON(github.actor) }},
+              "actor_url":      "${{ github.server_url }}/${{ github.actor }}",
+              "avatar":         ${{ toJSON(steps.meta.outputs.actor-avatar) }},
+              "java":           ${{ toJSON(inputs.java-version) }},
+              "build_tool":     ${{ toJSON(steps.setup.outputs.build-tool) }},
+              "runner_os":      ${{ toJSON(runner.os) }},
+              "started_at":     ${{ toJSON(env.BUILD_STARTED_AT) }},
+              "started_epoch":  ${{ toJSON(env.BUILD_STARTED_EPOCH) }},
+              "started_at_discord":  "<t:${{ env.BUILD_STARTED_EPOCH }}:F>",
+              "started_relative":    "<t:${{ env.BUILD_STARTED_EPOCH }}:R>",
+              "status":         "running",
+              "changelog":      ${{ toJSON(steps.changelog.outputs.block) }},
+              "commits":        ${{ toJSON(steps.changelog.outputs.count) }},
+              "commits_shown":  ${{ toJSON(steps.changelog.outputs.shown) }},
+              "commit_range":   ${{ toJSON(steps.changelog.outputs.range) }}
+            }
+
+      - name: Record start time
+        run: |
+          echo "BUILD_START_EPOCH=$(date -u +%s)" >> "$GITHUB_ENV"
+          {
+            echo "BUILD_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "BUILD_STARTED_EPOCH=$(date -u +%s)"
+          } >> "$GITHUB_ENV"
+
+      - name: Setup build environment
+        id: setup
+        uses: ./.groupez-actions/.github/actions/setup-build
+        with:
+          build-tool: ${{ inputs.build-tool }}
           java-version: ${{ inputs.java-version }}
-          distribution: ${{ inputs.java-distribution }}
-          server-id: github
+          java-distribution: ${{ inputs.java-distribution }}
+          cache: ${{ inputs.cache }}
+          gradle-opts: ${{ inputs.gradle-opts }}
           settings-path: ${{ github.workspace }}
+          working-directory: ${{ inputs.working-directory }}
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # ratchet:gradle/actions@v6.3.0
+      - name: Build
+        id: build
+        uses: ./.groupez-actions/.github/actions/run-build
+        with:
+          build-tool: ${{ steps.setup.outputs.build-tool }}
+          command: ${{ inputs.build-command }}
+          dev-args: ${{ inputs.dev-args }}
+          release-args: ${{ inputs.release-args }}
+          default-branch: ${{ inputs.default-branch }}
+          working-directory: ${{ inputs.working-directory }}
 
-      - name: Make the short sha
-        id: short_sha
-        run: |
-          echo "GITHUB_SHA_SHORT=$(echo "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
-
-      - name: Build with Gradle
-        run: |
-          chmod +x ./gradlew
-          if [ "$IS_DEFAULT_BRANCH" = "true" ]; then
-            ${{ inputs.build-command }}
-          else
-            ${{ inputs.build-command }} -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
-          fi
-
-      - name: Publish on maven
+      - name: Publish to maven
         if: ${{ inputs.publish && github.event_name != 'pull_request' }}
+        uses: ./.groupez-actions/.github/actions/run-build
+        with:
+          build-tool: ${{ steps.setup.outputs.build-tool }}
+          command: ${{ inputs.publish-command }}
+          tasks: ${{ inputs.project-to-publish }}
+          release-args: ${{ inputs.publish-release-args }}
+          dev-args: ${{ inputs.dev-args }}
+          default-branch: ${{ inputs.default-branch }}
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: Summarise test results
+        id: tests
+        if: ${{ always() && inputs.run-tests-summary }}
+        uses: ./.groupez-actions/.github/actions/test-summary
+        with:
+          build-tool: ${{ steps.setup.outputs.build-tool }}
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: Find build artifacts
+        id: artifacts
+        if: ${{ always() }}
+        uses: ./.groupez-actions/.github/actions/find-artifacts
+        with:
+          build-tool: ${{ steps.setup.outputs.build-tool }}
+          glob: ${{ inputs.artifact-glob }}
+          exclude: ${{ inputs.artifact-exclude }}
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: Compute duration
+        if: ${{ always() }}
         run: |
-          GRADLE_CMD="./gradlew ${{ inputs.project-to-publish }}"
-          if [ "$IS_DEFAULT_BRANCH" = "true" ]; then
-            $GRADLE_CMD -Drepository.name=releases
+          NOW=$(date -u +%s)
+          ELAPSED=$(( NOW - ${BUILD_START_EPOCH:-$NOW} ))
+          if [ "$ELAPSED" -ge 60 ]; then
+            echo "BUILD_DURATION=$((ELAPSED / 60))m $((ELAPSED % 60))s" >> "$GITHUB_ENV"
           else
-            $GRADLE_CMD -Darchive.classifier=DEV -Dgithub.sha=${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}
+            echo "BUILD_DURATION=${ELAPSED}s" >> "$GITHUB_ENV"
           fi
+          {
+            echo "BUILD_DURATION_SECONDS=${ELAPSED}"
+            echo "BUILD_FINISHED_AT=$(date -u -d "@${NOW}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "BUILD_FINISHED_EPOCH=${NOW}"
+          } >> "$GITHUB_ENV"
 
+      - name: Write job summary
+        if: ${{ always() }}
         env:
-          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
-          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
-
-      - name: Find ${{ inputs.project-name }} JAR
-        id: find_jar
+          JOB_STATUS: ${{ job.status }}
+          PROJECT: ${{ inputs.project-name }}
+          JAVA: ${{ inputs.java-version }}
+          TOOL: ${{ steps.setup.outputs.build-tool }}
+          TEST_SUMMARY: ${{ steps.tests.outputs.summary }}
+          SHA_SHORT: ${{ steps.meta.outputs.sha-short }}
+          SUBJECT: ${{ steps.meta.outputs.subject }}
+          COMMIT_COUNT: ${{ steps.changelog.outputs.count }}
+          COMMITS_SHOWN: ${{ steps.changelog.outputs.shown }}
+          ARTIFACT: ${{ steps.artifacts.outputs.name }}
         run: |
-          echo "Finding ${{ inputs.project-name }} JAR..."
-          jar_path=$(find target/ -name '*.jar' | head -n 1)
-          echo "Found ${{ inputs.project-name }} JAR at: $jar_path"
-          echo "JAR_PATH=$jar_path" >> "$GITHUB_OUTPUT"
+          {
+            echo "### ${PROJECT} on JDK ${JAVA} (${TOOL})"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Result | \`${JOB_STATUS}\` |"
+            echo "| Tests | ${TEST_SUMMARY:-not collected} |"
+            echo "| Artifact | ${ARTIFACT:-none} |"
+            echo "| Commit | \`${SHA_SHORT}\` ${SUBJECT} |"
+            echo "| Commits | ${COMMITS_SHOWN:-0}/${COMMIT_COUNT:-0} listed |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload JAR as artifact
-        if: ${{ github.event_name == 'pull_request' }}
+      - name: Upload build output
+        if: ${{ always() && (inputs.upload-artifact == 'always' || (inputs.upload-artifact == 'pr-only' && github.event_name == 'pull_request')) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v7.0.1
         with:
-          name: ${{ inputs.project-name }}-DEV-${{ steps.short_sha.outputs.GITHUB_SHA_SHORT }}-PR-${{ github.event.number }}-${{ github.run_id }}
-          path: target/
+          name: ${{ inputs.project-name }}-${{ steps.build.outputs.is-default-branch == 'true' && 'RELEASE' || 'DEV' }}-${{ steps.meta.outputs.sha-short }}-${{ github.run_id }}
+          path: ${{ inputs.artifact-path || steps.artifacts.outputs.paths }}
+          retention-days: ${{ inputs.artifact-retention-days }}
+          if-no-files-found: ignore
 
-      - name: Discord Webhook Action
-        if: ${{ inputs.publish-on-discord && github.event_name != 'pull_request' }}
-        uses: tsickert/discord-webhook@b217a69502f52803de774ded2b1ab7c282e99645 # ratchet:tsickert/discord-webhook@v7.0.0
+      - name: Upload test reports on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v7.0.1
         with:
-          webhook-url: ${{ secrets.WEBHOOK_URL }}
-          content: ${{ env.IS_DEFAULT_BRANCH == 'true' && format('New release build of {0} is available!', inputs.project-name) || format('New development build of {0} is available!', inputs.project-name) }}
+          name: test-reports-${{ github.run_id }}
+          path: |
+            **/target/surefire-reports/**
+            **/build/test-results/**
+          retention-days: ${{ inputs.artifact-retention-days }}
+          if-no-files-found: ignore
+
+      - name: Notify build result
+        id: notify-result
+        if: ${{ always() && env.NOTIFY == 'true' }}
+        continue-on-error: true
+        uses: ./.groupez-actions/.github/actions/discord-notify
+        with:
+          webhook: ${{ env.WEBHOOK }}
+          status: ${{ job.status == 'success' && 'success' || 'failure' }}
+          template: ${{ inputs.discord-templates-dir && format('{0}/{1}.json', inputs.discord-templates-dir, job.status == 'success' && 'success' || 'failure') || '' }}
+          message-id: ${{ steps.notify-start.outputs.message-id }}
+          username: ${{ inputs.discord-username || inputs.project-name }}
           avatar-url: ${{ inputs.discord-avatar-url }}
-          username: ${{ inputs.project-name }}
-          filename: ${{ steps.find_jar.outputs.jar_path }}
+          file: ${{ (inputs.discord-attach-jar && job.status == 'success') && steps.artifacts.outputs.path || '' }}
+          file-max-bytes: ${{ inputs.discord-file-max-bytes }}
+          values: |
+            {
+              "project":        ${{ toJSON(inputs.project-name) }},
+              "repo":           ${{ toJSON(github.repository) }},
+              "repo_name":      ${{ toJSON(github.event.repository.name) }},
+              "repo_owner":     ${{ toJSON(github.repository_owner) }},
+              "repo_url":       "${{ github.server_url }}/${{ github.repository }}",
+              "workflow":       ${{ toJSON(github.workflow) }},
+              "event":          ${{ toJSON(github.event_name) }},
+              "attempt":        ${{ toJSON(github.run_attempt) }},
+              "run_id":         ${{ toJSON(github.run_id) }},
+              "run_number":     ${{ toJSON(github.run_number) }},
+              "url":            ${{ toJSON(steps.meta.outputs.run-url) }},
+              "ref":            ${{ toJSON(github.ref_name) }},
+              "ref_type":       ${{ toJSON(github.ref_type) }},
+              "default_branch": ${{ toJSON(inputs.default-branch) }},
+              "sha":            ${{ toJSON(steps.meta.outputs.sha-short) }},
+              "sha_full":       ${{ toJSON(github.sha) }},
+              "subject":        ${{ toJSON(steps.meta.outputs.subject) }},
+              "author":         ${{ toJSON(steps.meta.outputs.author) }},
+              "commit_url":     ${{ toJSON(steps.meta.outputs.commit-url) }},
+              "compare_url":    ${{ toJSON(steps.changelog.outputs.compare-url) }},
+              "pr":             ${{ toJSON(steps.meta.outputs.pr-suffix) }},
+              "pr_number":      ${{ toJSON(steps.meta.outputs.pr-number) }},
+              "pr_url":         ${{ toJSON(steps.meta.outputs.pr-url) }},
+              "actor":          ${{ toJSON(github.actor) }},
+              "actor_url":      "${{ github.server_url }}/${{ github.actor }}",
+              "avatar":         ${{ toJSON(steps.meta.outputs.actor-avatar) }},
+              "java":           ${{ toJSON(inputs.java-version) }},
+              "build_tool":     ${{ toJSON(steps.setup.outputs.build-tool) }},
+              "runner_os":      ${{ toJSON(runner.os) }},
+              "started_at":     ${{ toJSON(env.BUILD_STARTED_AT) }},
+              "started_epoch":  ${{ toJSON(env.BUILD_STARTED_EPOCH) }},
+              "started_at_discord":  "<t:${{ env.BUILD_STARTED_EPOCH }}:F>",
+              "started_relative":    "<t:${{ env.BUILD_STARTED_EPOCH }}:R>",
+              "status":         "${{ job.status }}",
+              "tests":          ${{ toJSON(steps.tests.outputs.summary) }},
+              "tests_total":    ${{ toJSON(steps.tests.outputs.tests) }},
+              "tests_failed":   ${{ toJSON(steps.tests.outputs.failures) }},
+              "tests_errors":   ${{ toJSON(steps.tests.outputs.errors) }},
+              "tests_skipped":  ${{ toJSON(steps.tests.outputs.skipped) }},
+              "tests_passed":   ${{ toJSON(steps.tests.outputs.passed) }},
+              "duration":       ${{ toJSON(env.BUILD_DURATION) }},
+              "duration_seconds": ${{ toJSON(env.BUILD_DURATION_SECONDS) }},
+              "finished_at":    ${{ toJSON(env.BUILD_FINISHED_AT) }},
+              "finished_epoch": ${{ toJSON(env.BUILD_FINISHED_EPOCH) }},
+              "finished_at_discord": "<t:${{ env.BUILD_FINISHED_EPOCH }}:F>",
+              "finished_relative":   "<t:${{ env.BUILD_FINISHED_EPOCH }}:R>",
+              "artifact":       ${{ toJSON(steps.artifacts.outputs.name) }},
+              "artifact_size":  ${{ toJSON(steps.artifacts.outputs.size-human) }},
+              "artifact_count": ${{ toJSON(steps.artifacts.outputs.count) }},
+              "artifact_bytes": ${{ toJSON(steps.artifacts.outputs.total-bytes) }},
+              "changelog":      ${{ toJSON(steps.changelog.outputs.block) }},
+              "commits":        ${{ toJSON(steps.changelog.outputs.count) }},
+              "commits_shown":  ${{ toJSON(steps.changelog.outputs.shown) }},
+              "commit_range":   ${{ toJSON(steps.changelog.outputs.range) }}
+            }

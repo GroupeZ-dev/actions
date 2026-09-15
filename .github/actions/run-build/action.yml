@@ -1,0 +1,124 @@
+name: "Run build"
+description: >-
+  Run a Gradle or Maven command, appending release or development arguments depending on whether
+  the run is on the default branch.
+
+inputs:
+  build-tool:
+    description: "`auto`, `gradle` or `maven`. Only used to pick the default command."
+    required: false
+    default: "auto"
+  command:
+    description: >-
+      Command to run. Empty resolves per build tool: Gradle `./gradlew build`, Maven
+      `./mvnw -B --no-transfer-progress verify`. Set this to escape the abstraction entirely.
+    required: false
+    default: ""
+  tasks:
+    description: >-
+      Appended to the resolved command. Lets a caller keep the default command and just name the
+      tasks, e.g. `API:publish`.
+    required: false
+    default: ""
+  dev-args:
+    description: >-
+      Arguments appended off the default branch. {sha} is substituted with the short SHA.
+      The -D syntax is identical for Gradle and Maven, so the same convention covers both.
+    required: false
+    default: "-Darchive.classifier=DEV -Dgithub.sha={sha}"
+  release-args:
+    description: "Arguments appended on the default branch. {sha} is substituted."
+    required: false
+    default: ""
+  default-branch:
+    description: "Branch treated as the release branch."
+    required: false
+    default: "main"
+  working-directory:
+    description: "Directory to run the command in."
+    required: false
+    default: "."
+  chmod-wrapper:
+    description: "Run chmod +x on the wrapper script first."
+    required: false
+    default: "true"
+
+outputs:
+  is-default-branch:
+    description: "`true` when the current ref is the default branch."
+    value: ${{ steps.run.outputs.is-default-branch }}
+  sha-short:
+    description: "Abbreviated commit SHA."
+    value: ${{ steps.run.outputs.sha-short }}
+  command:
+    description: "The command that was actually executed."
+    value: ${{ steps.run.outputs.command }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        BUILD_TOOL: ${{ inputs.build-tool }}
+        COMMAND: ${{ inputs.command }}
+        TASKS: ${{ inputs.tasks }}
+        DEV_ARGS: ${{ inputs.dev-args }}
+        RELEASE_ARGS: ${{ inputs.release-args }}
+        DEFAULT_BRANCH: ${{ inputs.default-branch }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        CHMOD_WRAPPER: ${{ inputs.chmod-wrapper }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+
+        TOOL="$BUILD_TOOL"
+        if [ "$TOOL" = "auto" ]; then
+          if [ -f pom.xml ] || [ -f mvnw ]; then TOOL=maven; else TOOL=gradle; fi
+        fi
+
+        if [ -z "$COMMAND" ]; then
+          if [ "$TOOL" = "maven" ]; then
+            COMMAND="./mvnw -B --no-transfer-progress verify"
+          else
+            COMMAND="./gradlew build"
+          fi
+        fi
+
+        SHA_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "${GITHUB_SHA:0:7}")
+
+        # GITHUB_REF_NAME is the branch or tag name and, unlike ${GITHUB_REF##*/}, is not
+        # truncated by a slash in the branch name.
+        if [ "${GITHUB_REF_NAME:-}" = "$DEFAULT_BRANCH" ]; then
+          IS_DEFAULT_BRANCH=true
+          EXTRA="$RELEASE_ARGS"
+        else
+          IS_DEFAULT_BRANCH=false
+          EXTRA="$DEV_ARGS"
+        fi
+        EXTRA=${EXTRA//\{sha\}/$SHA_SHORT}
+
+        if [ "$CHMOD_WRAPPER" = "true" ]; then
+          if [ -f ./gradlew ]; then chmod +x ./gradlew; fi
+          if [ -f ./mvnw ]; then chmod +x ./mvnw; fi
+        fi
+
+        # Written as if-blocks, not `[ -n "$X" ] && …`, because under `set -e` a false test as
+        # the last command of the script would abort the step.
+        FULL="$COMMAND"
+        if [ -n "$TASKS" ]; then FULL="$FULL $TASKS"; fi
+        if [ -n "$EXTRA" ]; then FULL="$FULL $EXTRA"; fi
+
+        {
+          echo "is-default-branch=$IS_DEFAULT_BRANCH"
+          echo "sha-short=$SHA_SHORT"
+          echo "command=$FULL"
+        } >> "$GITHUB_OUTPUT"
+
+        # IS_DEFAULT_BRANCH is exported for later steps that branch on it, preserving the
+        # variable name the previous workflows used.
+        echo "IS_DEFAULT_BRANCH=$IS_DEFAULT_BRANCH" >> "$GITHUB_ENV"
+
+        echo "::group::$FULL"
+        eval "$FULL"
+        echo "::endgroup::"
