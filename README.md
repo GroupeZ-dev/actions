@@ -37,35 +37,29 @@ That gets you:
 - a development build off the default branch, tagged `-DEV` with the short SHA
 - a JUnit test summary in the job summary
 - a Discord message that posts as **build running** and is edited in place into **passed** or
-  **failed**, carrying the commit changelog, test counts, duration and the built jar
+  **failed**, showing the change, the result, tests, duration and built jar
 
 <details>
 <summary>What the Discord message looks like</summary>
 
 ```
 🔨 Build running                                    ← posted when the build starts
-GroupeZ-dev/zMenu · Build · attempt 1 · JDK 25
+zMenu
 ─────────────────────────────────────────────
 `fix: correct the inventory click handler`
-push on main · abc1234 by robie · triggered by robie
-[ View run ] [ Commit ]
+Started just now
+[ View details ]
 
                     ↓ the same message is edited when the build finishes
 
 ✅ Build passed
-GroupeZ-dev/zMenu · Build · attempt 1 · JDK 25
+zMenu
 ─────────────────────────────────────────────
 `fix: correct the inventory click handler`
-Tests 38 tests, all passing
-Duration 1m 3s
-─────────────────────────────────────────────
-4 commit(s) in this build
-```diff
-+ abc1234: fix: correct the inventory click handler
-+ 9f2e1a0: feat: add /zmenu reload
-```
+Checks: 38 tests, all passing
+Completed in: 1m 3s
 📎 zMenu-1.0.0.jar
-[ View run ] [ Commit ]
+[ View details ]
 ```
 
 </details>
@@ -102,7 +96,7 @@ jobs:
           webhook: ${{ secrets.WEBHOOK_URL }}
           status: success
           file: ${{ steps.jar.outputs.path }}
-          values: '{"repo": "${{ github.repository }}", "subject": "done"}'
+          values: '{"project": "zMenu", "subject": "done"}'
 ```
 
 ---

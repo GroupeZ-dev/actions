@@ -70,6 +70,7 @@ jobs:
           status: start
           values: |
             {
+              "project": "Self test",
               "repo": ${{ toJSON(github.repository) }},
               "workflow": "Self test",
               "attempt": ${{ toJSON(github.run_attempt) }},
@@ -97,6 +98,7 @@ jobs:
           file: README.md
           values: |
             {
+              "project": "Self test",
               "repo": ${{ toJSON(github.repository) }},
               "workflow": "Self test",
               "attempt": ${{ toJSON(github.run_attempt) }},

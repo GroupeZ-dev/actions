@@ -55,12 +55,19 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Git Bash on Windows ships `python`, not `python3`.
+# On Windows, `python3` can be only a Microsoft Store alias. Select the first
+# command that can actually start Python instead of trusting its presence on PATH.
 PYTHON=""
 for candidate in python3 python py; do
-  if command -v "$candidate" > /dev/null 2>&1; then PYTHON="$candidate"; break; fi
+  if command -v "$candidate" > /dev/null 2>&1 \
+    && "$candidate" -c 'import sys' > /dev/null 2>&1; then
+    PYTHON="$candidate"
+    break
+  fi
 done
 [ -n "$PYTHON" ] || { echo "error: python is required but not installed." >&2; exit 1; }
+"$PYTHON" -c 'import yaml' > /dev/null 2>&1 \
+  || { echo "error: Python needs PyYAML. Install it with: py -3 -m pip install PyYAML" >&2; exit 1; }
 
 for tool in jq curl; do
   command -v "$tool" > /dev/null 2>&1 || { echo "error: '$tool' is required but not installed." >&2; exit 1; }
@@ -223,7 +230,7 @@ if [ "$SEND" = true ]; then
     exit 2
   fi
   case "$WEBHOOK" in
-    https://discord.com/api/webhooks/*|https://discordapp.com/api/webhooks/*|https://canary.discord.com/api/webhooks/*) ;;
+    https://discord.com/api/webhooks/*|https://*.discord.com/api/webhooks/*|https://discordapp.com/api/webhooks/*|https://*.discordapp.com/api/webhooks/*) ;;
     *) echo "error: that does not look like a Discord webhook URL." >&2; exit 2 ;;
   esac
 

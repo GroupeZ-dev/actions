@@ -150,9 +150,9 @@ runs:
         # reachable without replacing the whole template. Explicit inputs win over these, and
         # anything already in `values` wins over both.
         case "$STATUS" in
-          start)   DEF_TITLE="🔨 Build running" ; DEF_ACCENT=15844367 ;;
-          success) DEF_TITLE="✅ Build passed"   ; DEF_ACCENT=3066993  ;;
-          failure) DEF_TITLE="❌ Build failed"   ; DEF_ACCENT=15158332 ;;
+          start)   DEF_TITLE="Build running 🔨" ; DEF_ACCENT=15844367 ;;
+          success) DEF_TITLE="Build passed ✅"   ; DEF_ACCENT=3066993  ;;
+          failure) DEF_TITLE="Build failed ❌"   ; DEF_ACCENT=15158332 ;;
           *)       DEF_TITLE="Build"            ; DEF_ACCENT=5793266  ;;
         esac
         [ -n "$TITLE" ] && DEF_TITLE="$TITLE"

@@ -7,7 +7,7 @@
       "components": [
         {
           "type": 10,
-          "content": "### {title}\n**{repo}** · {workflow} · attempt {attempt} · JDK {java}"
+          "content": "### __{project}__ | {title}"
         },
         {
           "type": 14,
@@ -16,26 +16,31 @@
         },
         {
           "type": 10,
-          "content": "`{subject}`"
+          "content": "**{commits}** commit(s) in this build:\n{changelog}"
+        },
+        {
+          "type": 14,
+          "divider": true,
+          "spacing": 1
         },
         {
           "type": 10,
-          "content": "-# {event} on **{ref}** · [`{sha}`]({commit_url}) by {author}{pr} · triggered by {actor}"
+          "content": "> -# Started {started_relative}."
         },
         {
           "type": 1,
           "components": [
             {
               "type": 2,
-              "label": "View run",
+              "label": "🚀 View the run",
               "style": 5,
               "url": "{url}"
             },
             {
               "type": 2,
-              "label": "Commit",
+              "label": "🔗 View the commit",
               "style": 5,
-              "url": "{commit_url}"
+              "url": "{url}"
             }
           ]
         }
