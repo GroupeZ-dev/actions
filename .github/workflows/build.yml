@@ -343,7 +343,6 @@ jobs:
               "actor_url":      "${{ github.server_url }}/${{ github.actor }}",
               "avatar":         ${{ toJSON(steps.meta.outputs.actor-avatar) }},
               "java":           ${{ toJSON(inputs.java-version) }},
-              "build_tool":     ${{ toJSON(steps.setup.outputs.build-tool) }},
               "runner_os":      ${{ toJSON(runner.os) }},
               "started_at":     ${{ toJSON(env.BUILD_STARTED_AT) }},
               "started_epoch":  ${{ toJSON(env.BUILD_STARTED_EPOCH) }},
