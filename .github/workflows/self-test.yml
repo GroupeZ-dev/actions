@@ -1,0 +1,136 @@
+name: Self test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7.0.1
+
+      # Installed from the project's own release rather than a third-party wrapper action, so
+      # there is no unpinned dependency to audit.
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.7"
+        run: |
+          set -euo pipefail
+          URL="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSLo actionlint.tar.gz "$URL"
+          tar -xzf actionlint.tar.gz actionlint
+          ./actionlint -color
+
+  discord:
+    name: Discord notify
+    runs-on: ubuntu-latest
+    # The secrets context is not available in a step-level `if:`, so it is surfaced as job env.
+    env:
+      SELFTEST_WEBHOOK: ${{ secrets.SELFTEST_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7.0.1
+
+      # With no webhook the action must succeed and emit an empty message id. This is the path
+      # every forked pull request takes, so it has to stay green.
+      - name: No webhook is a clean no-op
+        id: noop
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook: ""
+          status: start
+
+      - name: Assert no-op
+        env:
+          MESSAGE_ID: ${{ steps.noop.outputs.message-id }}
+        run: |
+          if [ -n "$MESSAGE_ID" ]; then
+            echo "expected an empty message id, got '$MESSAGE_ID'"
+            exit 1
+          fi
+          echo "ok: no-op returned an empty message id"
+
+      # Real delivery only runs where the secret exists, which excludes forks.
+      - name: Post, then edit in place
+        id: start
+        if: ${{ env.SELFTEST_WEBHOOK != '' }}
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook: ${{ env.SELFTEST_WEBHOOK }}
+          status: start
+          values: |
+            {
+              "project": "Self test",
+              "repo": ${{ toJSON(github.repository) }},
+              "workflow": "Self test",
+              "attempt": ${{ toJSON(github.run_attempt) }},
+              "java": "21",
+              "subject": "self-test: post then edit",
+              "actor": ${{ toJSON(github.actor) }},
+              "avatar": "https://avatars.githubusercontent.com/u/${{ github.actor_id }}?size=64",
+              "event": ${{ toJSON(github.event_name) }},
+              "ref": ${{ toJSON(github.ref_name) }},
+              "sha": "0000000",
+              "author": "self-test",
+              "pr": "",
+              "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "commit_url": "${{ github.server_url }}/${{ github.repository }}"
+            }
+
+      - name: Edit the same message with an attachment
+        id: result
+        if: ${{ env.SELFTEST_WEBHOOK != '' }}
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook: ${{ env.SELFTEST_WEBHOOK }}
+          status: success
+          message-id: ${{ steps.start.outputs.message-id }}
+          file: README.md
+          values: |
+            {
+              "project": "Self test",
+              "repo": ${{ toJSON(github.repository) }},
+              "workflow": "Self test",
+              "attempt": ${{ toJSON(github.run_attempt) }},
+              "java": "21",
+              "subject": "self-test: post then edit",
+              "actor": ${{ toJSON(github.actor) }},
+              "avatar": "https://avatars.githubusercontent.com/u/${{ github.actor_id }}?size=64",
+              "event": ${{ toJSON(github.event_name) }},
+              "ref": ${{ toJSON(github.ref_name) }},
+              "sha": "0000000",
+              "author": "self-test",
+              "pr": "",
+              "tests": "2 tests, all passing",
+              "duration": "0s",
+              "commits": "1",
+              "changelog": "```diff\n+ 0000000: self-test\n```",
+              "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "commit_url": "${{ github.server_url }}/${{ github.repository }}"
+            }
+
+      - name: Assert the message was edited, not duplicated
+        if: ${{ env.SELFTEST_WEBHOOK != '' }}
+        env:
+          START_ID: ${{ steps.start.outputs.message-id }}
+          RESULT_ID: ${{ steps.result.outputs.message-id }}
+        run: |
+          if [ -z "$START_ID" ]; then
+            echo "start message was not posted"
+            exit 1
+          fi
+          if [ "$START_ID" != "$RESULT_ID" ]; then
+            echo "expected the result to edit $START_ID, but it posted $RESULT_ID"
+            exit 1
+          fi
+          echo "ok: one message transitioned in place ($START_ID)"

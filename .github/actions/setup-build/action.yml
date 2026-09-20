@@ -1,0 +1,119 @@
+name: "Setup build"
+description: >-
+  Detect the build tool, install a JDK and configure dependency caching for either Gradle or
+  Maven.
+
+inputs:
+  build-tool:
+    description: "`auto`, `gradle` or `maven`."
+    required: false
+    default: "auto"
+  java-version:
+    description: >-
+      JDK version to install. 25 is a *build* requirement for projects compiled against a
+      Java 25 artifact such as a recent paper-api; the jar a project produces can still target
+      an older release via its own compiler settings.
+    required: false
+    default: "25"
+  java-distribution:
+    description: "JDK distribution."
+    required: false
+    default: "temurin"
+  cache:
+    description: >-
+      Enable dependency caching. Gradle caches through gradle/actions/setup-gradle, Maven through
+      actions/setup-java's own cache.
+    required: false
+    default: "true"
+  gradle-opts:
+    description: "Value for GRADLE_OPTS. Applies to the whole job, not just this step."
+    required: false
+    default: "-Dorg.gradle.caching=true -Dorg.gradle.parallel=true"
+  server-id:
+    description: "Maven server id written into the generated settings.xml."
+    required: false
+    default: "github"
+  settings-path:
+    description: "Where actions/setup-java writes settings.xml. Empty uses its default."
+    required: false
+    default: ""
+  working-directory:
+    description: "Directory to detect the build tool in."
+    required: false
+    default: "."
+
+outputs:
+  build-tool:
+    description: "The resolved build tool, `gradle` or `maven`."
+    value: ${{ steps.detect.outputs.build-tool }}
+  java-version:
+    description: "The JDK version that was installed."
+    value: ${{ inputs.java-version }}
+  wrapper:
+    description: "Path to the detected wrapper script, empty when there is none."
+    value: ${{ steps.detect.outputs.wrapper }}
+
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      env:
+        BUILD_TOOL: ${{ inputs.build-tool }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -uo pipefail
+        cd "$WORKING_DIRECTORY"
+
+        TOOL="$BUILD_TOOL"
+        if [ "$TOOL" = "auto" ]; then
+          HAS_MAVEN=false; HAS_GRADLE=false
+          { [ -f pom.xml ] || [ -f mvnw ]; } && HAS_MAVEN=true
+          { [ -f build.gradle ] || [ -f build.gradle.kts ] || [ -f gradlew ]; } && HAS_GRADLE=true
+
+          if [ "$HAS_MAVEN" = true ] && [ "$HAS_GRADLE" = true ]; then
+            TOOL=maven
+            echo "::notice::Both Maven and Gradle files are present; choosing maven. Set 'build-tool' explicitly to override."
+          elif [ "$HAS_MAVEN" = true ]; then
+            TOOL=maven
+          elif [ "$HAS_GRADLE" = true ]; then
+            TOOL=gradle
+          else
+            echo "::error::Could not detect a build tool (no pom.xml, mvnw, build.gradle[.kts] or gradlew). Set 'build-tool' explicitly."
+            exit 1
+          fi
+        fi
+
+        case "$TOOL" in
+          maven)  WRAPPER=$([ -f mvnw ] && echo "./mvnw" || echo "") ;;
+          gradle) WRAPPER=$([ -f gradlew ] && echo "./gradlew" || echo "") ;;
+          *) echo "::error::build-tool must be auto, gradle or maven (got '$TOOL')."; exit 1 ;;
+        esac
+
+        {
+          echo "build-tool=$TOOL"
+          echo "wrapper=$WRAPPER"
+        } >> "$GITHUB_OUTPUT"
+        echo "Build tool: $TOOL (wrapper: ${WRAPPER:-none})"
+
+    - name: Set up JDK ${{ inputs.java-version }}
+      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # ratchet:actions/setup-java@v6.0.1
+      with:
+        java-version: ${{ inputs.java-version }}
+        distribution: ${{ inputs.java-distribution }}
+        server-id: ${{ inputs.server-id }}
+        settings-path: ${{ inputs.settings-path }}
+        cache: ${{ (inputs.cache == 'true' && steps.detect.outputs.build-tool == 'maven') && 'maven' || '' }}
+
+    - name: Setup Gradle
+      if: ${{ steps.detect.outputs.build-tool == 'gradle' }}
+      uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # ratchet:gradle/actions@v6.3.0
+      with:
+        cache-disabled: ${{ inputs.cache != 'true' }}
+
+    - name: Export GRADLE_OPTS
+      if: ${{ steps.detect.outputs.build-tool == 'gradle' && inputs.gradle-opts != '' }}
+      shell: bash
+      env:
+        GRADLE_OPTS_VALUE: ${{ inputs.gradle-opts }}
+      run: echo "GRADLE_OPTS=$GRADLE_OPTS_VALUE" >> "$GITHUB_ENV"

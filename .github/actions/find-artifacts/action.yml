@@ -1,0 +1,158 @@
+name: "Find artifacts"
+description: >-
+  Locate build output jars for either a Maven or a Gradle layout, excluding the sources and
+  javadoc jars that would otherwise be picked first.
+
+inputs:
+  build-tool:
+    description: "`auto`, `gradle` or `maven`. Only used to pick the default glob."
+    required: false
+    default: "auto"
+  glob:
+    description: >-
+      Glob for build output, relative to the working directory. Empty resolves per build tool:
+      Maven `**/target/*.jar`, Gradle `**/build/libs/*.jar`.
+    required: false
+    default: ""
+  exclude:
+    description: >-
+      Comma-separated filename patterns to drop. The defaults matter: a project that attaches
+      sources and javadoc jars would otherwise have one of those selected first.
+    required: false
+    default: "*-sources.jar,*-javadoc.jar,original-*.jar"
+  max-files:
+    description: "Maximum number of paths to return. 0 means unlimited."
+    required: false
+    default: "1"
+  working-directory:
+    description: "Directory to search from."
+    required: false
+    default: "."
+  fail-if-none:
+    description: "Fail when nothing matched, instead of returning empty outputs."
+    required: false
+    default: "false"
+
+outputs:
+  path:
+    description: "First matching file, empty when nothing matched."
+    value: ${{ steps.find.outputs.path }}
+  paths:
+    description: "All matching files, newline separated."
+    value: ${{ steps.find.outputs.paths }}
+  name:
+    description: "Basename of the first match."
+    value: ${{ steps.find.outputs.name }}
+  count:
+    description: "Number of matches."
+    value: ${{ steps.find.outputs.count }}
+  total-bytes:
+    description: "Combined size of the returned files."
+    value: ${{ steps.find.outputs.total-bytes }}
+  size-human:
+    description: "Combined size formatted for display, e.g. `3.4 MiB`."
+    value: ${{ steps.find.outputs.size-human }}
+
+runs:
+  using: composite
+  steps:
+    - id: find
+      shell: bash
+      env:
+        BUILD_TOOL: ${{ inputs.build-tool }}
+        GLOB: ${{ inputs.glob }}
+        EXCLUDE: ${{ inputs.exclude }}
+        MAX_FILES: ${{ inputs.max-files }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        FAIL_IF_NONE: ${{ inputs.fail-if-none }}
+      run: |
+        set -uo pipefail
+        cd "$WORKING_DIRECTORY"
+
+        if [ -z "$GLOB" ]; then
+          TOOL="$BUILD_TOOL"
+          if [ "$TOOL" = "auto" ]; then
+            if [ -f pom.xml ] || [ -f mvnw ]; then TOOL=maven; else TOOL=gradle; fi
+          fi
+          if [ "$TOOL" = "maven" ]; then
+            GLOB='**/target/*.jar'
+          else
+            GLOB='**/build/libs/*.jar'
+          fi
+        fi
+        echo "Glob: $GLOB"
+
+        shopt -s globstar nullglob
+        MATCHES=()
+        for f in $GLOB; do
+          [ -f "$f" ] || continue
+          SKIP=false
+          IFS=',' read -ra PATTERNS <<< "$EXCLUDE"
+          for p in "${PATTERNS[@]}"; do
+            p=$(printf '%s' "$p" | tr -d '[:space:]')
+            [ -n "$p" ] || continue
+            case "$(basename "$f")" in
+              $p) SKIP=true; break ;;
+            esac
+          done
+          [ "$SKIP" = true ] && continue
+          MATCHES+=("$f")
+        done
+
+        # Newest first, so a rebuild in the same workspace reports the jar that was just produced.
+        if [ ${#MATCHES[@]} -gt 0 ]; then
+          mapfile -t MATCHES < <(printf '%s\n' "${MATCHES[@]}" | xargs -d '\n' ls -1t 2>/dev/null || printf '%s\n' "${MATCHES[@]}")
+        fi
+
+        if [ "$MAX_FILES" != "0" ] && [ ${#MATCHES[@]} -gt "$MAX_FILES" ]; then
+          MATCHES=("${MATCHES[@]:0:$MAX_FILES}")
+        fi
+
+        COUNT=${#MATCHES[@]}
+        if [ "$COUNT" -eq 0 ]; then
+          echo "No artifacts matched."
+          if [ "$FAIL_IF_NONE" = "true" ]; then
+            echo "::error::No artifacts matched '$GLOB' in $WORKING_DIRECTORY"
+            exit 1
+          fi
+          {
+            echo "path="
+            echo "name="
+            echo "count=0"
+            echo "total-bytes=0"
+            echo "size-human="
+            echo "paths="
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        TOTAL=0
+        for f in "${MATCHES[@]}"; do
+          TOTAL=$(( TOTAL + $(wc -c < "$f" | tr -d '[:space:]') ))
+          echo "  $f"
+        done
+
+        if [ "$TOTAL" -ge 1048576 ]; then
+          SIZE_HUMAN="$(( TOTAL / 1048576 )).$(( (TOTAL % 1048576) * 10 / 1048576 )) MiB"
+        elif [ "$TOTAL" -ge 1024 ]; then
+          SIZE_HUMAN="$(( TOTAL / 1024 )) KiB"
+        else
+          SIZE_HUMAN="${TOTAL} B"
+        fi
+
+        {
+          echo "path=${MATCHES[0]}"
+          echo "name=$(basename "${MATCHES[0]}")"
+          echo "count=$COUNT"
+          echo "total-bytes=$TOTAL"
+          echo "size-human=$SIZE_HUMAN"
+        } >> "$GITHUB_OUTPUT"
+
+        DELIM="PATHS_$(openssl rand -hex 8)"
+        {
+          echo "paths<<${DELIM}"
+          printf '%s\n' "${MATCHES[@]}"
+          echo "${DELIM}"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "Found $COUNT artifact(s), $TOTAL bytes."

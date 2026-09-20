@@ -1,0 +1,125 @@
+name: "Test summary"
+description: >-
+  Parse JUnit XML test reports from Maven Surefire or Gradle and produce a one-line summary plus
+  per-category counts.
+
+inputs:
+  build-tool:
+    description: "`auto`, `gradle` or `maven`. Only used to pick the default report glob."
+    required: false
+    default: "auto"
+  report-glob:
+    description: >-
+      Glob for the JUnit XML reports. Empty resolves per build tool: Maven
+      `**/target/surefire-reports/TEST-*.xml`, Gradle `**/build/test-results/**/TEST-*.xml`.
+      Gradle writes the same schema, so one parser covers both.
+    required: false
+    default: ""
+  write-job-summary:
+    description: "Append a small table to the GitHub job summary."
+    required: false
+    default: "false"
+  working-directory:
+    description: "Directory to search from."
+    required: false
+    default: "."
+
+outputs:
+  summary:
+    description: "Human-readable summary, e.g. '38 tests, all passing'."
+    value: ${{ steps.tests.outputs.summary }}
+  tests:
+    description: "Total tests."
+    value: ${{ steps.tests.outputs.tests }}
+  failures:
+    description: "Assertion failures."
+    value: ${{ steps.tests.outputs.failures }}
+  errors:
+    description: "Errors."
+    value: ${{ steps.tests.outputs.errors }}
+  skipped:
+    description: "Skipped tests."
+    value: ${{ steps.tests.outputs.skipped }}
+  passed:
+    description: "true when at least one test ran and none failed or errored."
+    value: ${{ steps.tests.outputs.passed }}
+
+runs:
+  using: composite
+  steps:
+    - id: tests
+      shell: bash
+      env:
+        BUILD_TOOL: ${{ inputs.build-tool }}
+        REPORT_GLOB: ${{ inputs.report-glob }}
+        WRITE_JOB_SUMMARY: ${{ inputs.write-job-summary }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -uo pipefail
+        cd "$WORKING_DIRECTORY"
+
+        if [ -z "$REPORT_GLOB" ]; then
+          TOOL="$BUILD_TOOL"
+          if [ "$TOOL" = "auto" ]; then
+            if [ -f pom.xml ] || [ -f mvnw ]; then TOOL=maven; else TOOL=gradle; fi
+          fi
+          if [ "$TOOL" = "maven" ]; then
+            REPORT_GLOB='**/target/surefire-reports/TEST-*.xml'
+          else
+            REPORT_GLOB='**/build/test-results/**/TEST-*.xml'
+          fi
+        fi
+        echo "Report glob: $REPORT_GLOB"
+
+        python3 - <<'PY' >> "$GITHUB_OUTPUT"
+        import glob, os, xml.etree.ElementTree as ET
+
+        pattern = os.environ["REPORT_GLOB"]
+        totals = dict(tests=0, failures=0, errors=0, skipped=0)
+        files = 0
+        for path in glob.glob(pattern, recursive=True):
+            try:
+                root = ET.parse(path).getroot()
+            except ET.ParseError:
+                continue
+            files += 1
+            for key in totals:
+                totals[key] += int(root.get(key, 0) or 0)
+
+        bad = totals["failures"] + totals["errors"]
+        if totals["tests"] == 0:
+            summary = "no tests ran"
+        elif bad:
+            summary = f"{totals['tests']} tests, {bad} failed"
+        else:
+            summary = f"{totals['tests']} tests, all passing"
+        if totals["skipped"]:
+            summary += f" ({totals['skipped']} skipped)"
+
+        print(f"summary={summary}")
+        for key, value in totals.items():
+            print(f"{key}={value}")
+        print(f"passed={'true' if totals['tests'] and not bad else 'false'}")
+        print(f"report-files={files}")
+        PY
+
+    - if: ${{ inputs.write-job-summary == 'true' }}
+      shell: bash
+      env:
+        TEST_SUMMARY: ${{ steps.tests.outputs.summary }}
+        TESTS: ${{ steps.tests.outputs.tests }}
+        FAILURES: ${{ steps.tests.outputs.failures }}
+        ERRORS: ${{ steps.tests.outputs.errors }}
+        SKIPPED: ${{ steps.tests.outputs.skipped }}
+      run: |
+        {
+          echo "### Tests"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Summary | ${TEST_SUMMARY} |"
+          echo "| Total | ${TESTS} |"
+          echo "| Failures | ${FAILURES} |"
+          echo "| Errors | ${ERRORS} |"
+          echo "| Skipped | ${SKIPPED} |"
+        } >> "$GITHUB_STEP_SUMMARY"

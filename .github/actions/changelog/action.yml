@@ -1,0 +1,176 @@
+name: "Commit changelog"
+description: >-
+  Build a size-budgeted list of the commits in this build, ready to drop into a Discord message
+  or a job summary.
+
+inputs:
+  budget:
+    description: >-
+      Maximum characters for the rendered block. Discord publishes a 40-component cap but no
+      total character budget; 1500 stays safe even against the legacy 2000-character message
+      limit. Raise it if your server accepts more.
+    required: false
+    default: "1500"
+  fallback-count:
+    description: "How many commits to list when no usable range can be determined."
+    required: false
+    default: "10"
+  format:
+    description: "`diff` (fenced diff block), `markdown` (bullet list) or `plain`."
+    required: false
+    default: "diff"
+  line-template:
+    description: "Per-commit line. {sha} and {subject} are substituted."
+    required: false
+    default: "{sha}: {subject}"
+  include-merges:
+    description: "Include merge commits."
+    required: false
+    default: "false"
+  exclude-pattern:
+    description: >-
+      Extended regex; matching subjects are dropped. Useful for filtering dependency bumps,
+      e.g. '^build\(deps\)'.
+    required: false
+    default: ""
+  empty-text:
+    description: "Rendered when the range contains no commits."
+    required: false
+    default: "-# No commits in range."
+
+outputs:
+  block:
+    description: "The rendered changelog block."
+    value: ${{ steps.changelog.outputs.block }}
+  count:
+    description: "Total commits in range."
+    value: ${{ steps.changelog.outputs.count }}
+  shown:
+    description: "Commits that fit inside the budget."
+    value: ${{ steps.changelog.outputs.shown }}
+  range:
+    description: "The git range that was used."
+    value: ${{ steps.changelog.outputs.range }}
+  compare-url:
+    description: >-
+      Link comparing the range on GitHub, empty when the range was a plain commit count with no
+      base to compare against.
+    value: ${{ steps.changelog.outputs.compare-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: changelog
+      shell: bash
+      env:
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+        PUSH_BEFORE: ${{ github.event.before }}
+        BUDGET: ${{ inputs.budget }}
+        FALLBACK_COUNT: ${{ inputs.fallback-count }}
+        FORMAT: ${{ inputs.format }}
+        LINE_TEMPLATE: ${{ inputs.line-template }}
+        INCLUDE_MERGES: ${{ inputs.include-merges }}
+        EXCLUDE_PATTERN: ${{ inputs.exclude-pattern }}
+        EMPTY_TEXT: ${{ inputs.empty-text }}
+      run: |
+        set -uo pipefail
+        ZERO=0000000000000000000000000000000000000000
+
+        # Walking a commit range needs real history. checkout's default depth of 1 cannot resolve
+        # one, which yields a silently empty changelog, so say so rather than degrade quietly.
+        if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+          echo "::warning::Shallow clone detected. Set 'fetch-depth: 0' on actions/checkout or the changelog will be empty."
+        fi
+
+        # Prefer PR base->HEAD, else push before->HEAD, else the last N commits. Each candidate is
+        # checked for existence first, so a force-push whose old tip is gone, a brand-new branch
+        # (before is all zeros) or a manual workflow_dispatch degrades instead of failing.
+        if [ -n "${PR_BASE:-}" ] && git cat-file -e "${PR_BASE}^{commit}" 2>/dev/null; then
+          RANGE="${PR_BASE}..HEAD"
+        elif [ -n "${PUSH_BEFORE:-}" ] && [ "$PUSH_BEFORE" != "$ZERO" ] \
+             && git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+          RANGE="${PUSH_BEFORE}..HEAD"
+        else
+          RANGE="-${FALLBACK_COUNT}"
+          echo "No usable commit range; falling back to the last ${FALLBACK_COUNT} commits."
+        fi
+
+        MERGE_FLAG="--no-merges"
+        [ "$INCLUDE_MERGES" = "true" ] && MERGE_FLAG=""
+
+        # A tab cannot appear inside a git subject, so it is a safe field separator; a space or
+        # colon could not be.
+        raw_log() { git log $RANGE $MERGE_FLAG --format='%h%x09%s'; }
+
+        filter() {
+          if [ -n "$EXCLUDE_PATTERN" ]; then
+            grep -Ev "$(printf '%s' "$EXCLUDE_PATTERN")" || true
+          else
+            cat
+          fi
+        }
+
+        TOTAL=$(raw_log | filter | wc -l | tr -d '[:space:]')
+
+        case "$FORMAT" in
+          markdown) PREFIX="- " ;;
+          plain)    PREFIX="" ;;
+          *)        PREFIX="+ " ;;
+        esac
+
+        LINES=""
+        USED=0
+        while IFS=$'\t' read -r SHA SUBJECT; do
+          [ -n "$SHA" ] || continue
+          # A backtick would terminate the fenced diff block early and wreck the layout.
+          SUBJECT=${SUBJECT//\`/\'}
+          LINE="$LINE_TEMPLATE"
+          LINE=${LINE//\{sha\}/$SHA}
+          LINE=${LINE//\{subject\}/$SUBJECT}
+          LINE="${PREFIX}${LINE}"
+          # Break at the first commit that does not fit rather than skipping it. The list is
+          # newest-first, so skipping a long subject mid-way produces a non-contiguous list that
+          # reads as though the shown commits were consecutive.
+          if [ $(( ${#LINES} + ${#LINE} + 40 )) -gt "$BUDGET" ]; then
+            break
+          fi
+          LINES="${LINES}${LINE}"$'\n'
+          USED=$((USED + 1))
+        done < <(raw_log | filter)
+
+        OMITTED=$((TOTAL - USED))
+        if [ "$OMITTED" -gt 0 ]; then
+          LINES="${LINES}${PREFIX}... and ${OMITTED} more commit(s)"$'\n'
+        fi
+
+        if [ "$TOTAL" -eq 0 ]; then
+          BLOCK="$EMPTY_TEXT"
+        elif [ "$FORMAT" = "diff" ]; then
+          BLOCK=$'```diff\n'"${LINES}"$'```'
+        else
+          BLOCK="${LINES}"
+        fi
+
+        # Only a real A..B range can be compared; the "last N commits" fallback has no base.
+        COMPARE_URL=""
+        case "$RANGE" in
+          *..HEAD) COMPARE_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/compare/${RANGE%..HEAD}...${GITHUB_SHA}" ;;
+        esac
+
+        {
+          echo "count=$TOTAL"
+          echo "shown=$USED"
+          echo "range=$RANGE"
+          echo "compare-url=$COMPARE_URL"
+        } >> "$GITHUB_OUTPUT"
+
+        # A fixed delimiter could be produced verbatim by a crafted commit subject, letting a
+        # fork PR terminate the block early and write arbitrary step outputs.
+        DELIM="CHANGELOG_$(openssl rand -hex 8)"
+        {
+          echo "block<<${DELIM}"
+          printf '%s\n' "$BLOCK"
+          echo "${DELIM}"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "Changelog: ${USED}/${TOTAL} commits, $(printf '%s' "$BLOCK" | wc -c) chars (budget ${BUDGET})."
